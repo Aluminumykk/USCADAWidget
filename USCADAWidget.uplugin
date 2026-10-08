@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "USCADA Widget",
+	"Description": "WinCC-like SCADA UI configuration widgets (line/drawing primitives) built on UMG + Slate.",
+	"Category": "UserInterface",
+	"CreatedBy": "Pr_UEDraw",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "USCADAWidget",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

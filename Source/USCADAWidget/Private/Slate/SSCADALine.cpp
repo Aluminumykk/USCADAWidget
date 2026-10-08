@@ -160,10 +160,13 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 	if (LineStyle.Get() == ESCADALineStyle::Solid)
 	{
 		// 实线：整条折线一次绘制（连续连接正是我们要的）。
-		// 有箭头的端把线体缩短一个箭头长度，线尾正好接到箭头底边。
+		// 有箭头的端把线体缩短一个箭头长度，再往回探入 ArrowOverlap：
+		// 线尾钻到箭头底边内侧（箭头不透明且后绘制，盖住重叠区），
+		// 避免"恰好相接"时像素取整/抗锯齿在相接处露出细缝。
+		const float ArrowOverlap = FMath::Max(2.0f, LineThickness * 0.25f);
 		TArray<FVector2D> Body = Polyline;
-		if (TrimStart > 0.f) { Body[0] = Polyline[0] + (Polyline[1] - Polyline[0]).GetSafeNormal() * TrimStart; }
-		if (TrimEnd > 0.f) { const int32 N = Body.Num(); Body[N - 1] = Polyline.Last() + (Polyline[Polyline.Num() - 2] - Polyline.Last()).GetSafeNormal() * TrimEnd; }
+		if (TrimStart > 0.f) { Body[0] = Polyline[0] + (Polyline[1] - Polyline[0]).GetSafeNormal() * FMath::Max(TrimStart - ArrowOverlap, 0.0f); }
+		if (TrimEnd > 0.f) { const int32 N = Body.Num(); Body[N - 1] = Polyline.Last() + (Polyline[Polyline.Num() - 2] - Polyline.Last()).GetSafeNormal() * FMath::Max(TrimEnd - ArrowOverlap, 0.0f); }
 		FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, Body, DrawEffects, FinalColor, /*bAntialias=*/true, ScaledLineThickness);
 		// 圆连接：每个中间顶点盖一个直径 = 线宽的实心盘（与圆顶同一图元），
 		// 盖住 Slate 条带在拐角分裂处的楔形缺口，任意角度都连续。

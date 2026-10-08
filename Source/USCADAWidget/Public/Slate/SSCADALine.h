@@ -65,7 +65,7 @@ public:
 	/** 全局统一闪烁相位（所有图元同步，1 秒换相）。true = 显示正常色，false = 显示闪烁色 */
 	static bool IsFlashPhaseNormal();
 
-private:
+protected:
 	/** 按线型把折线拆成虚线/点线的独立线段点对列表（仅用于非实线样式；调用方需每两个点画一条独立线段）。
 	 *  OutIsDot 与段索引一一对应，标记该段是“点”（画成 1:1 方块）还是“划”。
 	 *  TrimStart/TrimEnd：折线首/尾各裁掉的长度（箭头区域不再画点/划，避免与箭头重叠）。 */
@@ -80,7 +80,8 @@ private:
 	 *  Radius <= 0 或点数 < 3 → 原样输出；退化（共线/近掉头）顶点保持尖角。输出仍是一条完整折线。 */
 	void BuildRoundedPolyline(const TArray<FVector2D>& In, float Radius, TArray<FVector2D>& Out) const;
 
-private:
+protected:
+	// protected：供子类（SSCADAPolygon 等）复用属性与绘制辅助
 	TAttribute<TArray<FVector2D>> Points;
 	TAttribute<FLinearColor> Color;
 	TAttribute<float> Thickness;

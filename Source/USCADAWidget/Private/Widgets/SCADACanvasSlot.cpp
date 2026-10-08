@@ -4,6 +4,7 @@
 
 #include "Widgets/SCADALineWidget.h"
 #include "Widgets/SCADAPolylineWidget.h"
+#include "Widgets/SCADAPolygonWidget.h"
 
 #if WITH_EDITOR
 void USCADACanvasSlot::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
@@ -28,5 +29,9 @@ void USCADACanvasSlot::NotifyContentSlotGeometryChanged()
 	else if (USCADAPolylineWidget* Polyline = Cast<USCADAPolylineWidget>(Content))
 	{
 		Polyline->ForceSyncFromSlotRect();
+	}
+	else if (USCADAPolygonWidget* Polygon = Cast<USCADAPolygonWidget>(Content))
+	{
+		Polygon->ForceSyncFromSlotRect();
 	}
 }

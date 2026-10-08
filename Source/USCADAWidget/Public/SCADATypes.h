@@ -35,3 +35,13 @@ enum class ESCADALineCap : uint8
 	/** 圆形：端点处画一个直径等于线宽、向外凸出的实心半圆 */
 	Round UMETA(DisplayName = "圆形 Round")
 };
+
+/** 多边形填充图案（对应 WinCC 的“背景填充图案”） */
+UENUM(BlueprintType)
+enum class ESCADAFillPattern : uint8
+{
+	/** 实心填充 */
+	Solid UMETA(DisplayName = "实心 Solid"),
+	/** 透明（不填充，只画边框） */
+	Transparent UMETA(DisplayName = "透明 Transparent")
+};

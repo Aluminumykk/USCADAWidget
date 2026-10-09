@@ -121,6 +121,12 @@ private:
 	/** 圆外接正方形 → 槽矩形（编辑圆心/半径后调用） */
 	void SyncSlotFromGeometry();
 
+	/** 几何数据包围盒左上角（初始放置认领用） */
+	FVector2D GetGeometryMin() const;
+
+	/** 几何数据整体平移（初始放置认领用） */
+	void TranslateGeometryBy(const FVector2D& Delta);
+
 	/** 确保核心 Ticker 已注册（惰性，首次交互/重建时调用）。
 	 *  必须让所有实例都能 Tick：UMG 设计器里同一控件存在 WidgetTree(archetype，无 Slate)
 	 *  与 WidgetTree_0(预览，有 Slate) 两个实例，设计器拖动会把槽矩形镜像写进两棵树，
@@ -149,6 +155,9 @@ private:
 	/** 缓存是否已初始化。未初始化时首次 Tick 只采纳当前槽矩形为基准（不映射），
 	 *  否则默认 1x1 缓存会被当成一次从 1x1 开始的"拖动"，半径被爆炸性放大 */
 	bool bSlotCacheValid = false;
+	/** 初始放置认领标记：新实例首次发现槽位置与几何数据不一致时（设计器拖放落点），
+	 *  把几何数据平移到槽位置而不是把槽拉回数据原点；认领后或首次映射时复位 */
+	bool bPendingInitialPlacement = true;
 	/** 上一帧设计器原始槽尺寸的符号（跟踪符号基线；交互结束时复位。圆镜像 = 自身，不产生实际映射） */
 	bool bPrevRawNegX = false;
 	bool bPrevRawNegY = false;

@@ -22,7 +22,39 @@ TSharedRef<SWidget> USCADAPolygonWidget::RebuildWidget()
 		}
 	};
 
+	// archetype 实例（Slate 不一定被 Tick）也要能跑 CheckSlotSync，
+	// 否则面板拖放的落点（静默写在 archetype 槽上）永远认领不到
+	EnsureCoreTicker();
+
 	return MyPolygon.ToSharedRef();
+}
+
+void USCADAPolygonWidget::EnsureCoreTicker()
+{
+	if (CoreTickerHandle.IsValid())
+	{
+		return;
+	}
+	TWeakObjectPtr<USCADAPolygonWidget> WeakThis(this);
+	CoreTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
+	{
+		if (WeakThis.IsValid())
+		{
+			WeakThis->CheckSlotSync();
+			return true;
+		}
+		return false;
+	}));
+}
+
+void USCADAPolygonWidget::BeginDestroy()
+{
+	if (CoreTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(CoreTickerHandle);
+		CoreTickerHandle.Reset();
+	}
+	Super::BeginDestroy();
 }
 
 void USCADAPolygonWidget::SynchronizeProperties()
@@ -106,6 +138,21 @@ void USCADAPolygonWidget::GetPointsBounds(FVector2D& OutMin, FVector2D& OutMax) 
 	}
 }
 
+FVector2D USCADAPolygonWidget::GetGeometryMin() const
+{
+	FVector2D Min, Max;
+	GetPointsBounds(Min, Max);
+	return Min;
+}
+
+void USCADAPolygonWidget::TranslateGeometryBy(const FVector2D& Delta)
+{
+	for (FVector2D& P : Points)
+	{
+		P += Delta;
+	}
+}
+
 void USCADAPolygonWidget::SyncSlotFromPoints()
 {
 	if (bSyncingGeometry)
@@ -143,6 +190,7 @@ void USCADAPolygonWidget::ForceSyncFromSlotRect()
 {
 	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot))
 	{
+		EnsureCoreTicker();
 		CheckSlotSync();
 	}
 }
@@ -172,10 +220,27 @@ void USCADAPolygonWidget::CheckSlotSync()
 	if (!bSlotCacheValid)
 	{
 		bSlotCacheValid = true;
-		CachedSlotPos = RawPos;
-		CachedSlotSize = RawSize;
-		bPrevRawNegX = RawSize.X < 0.0;
-		bPrevRawNegY = RawSize.Y < 0.0;
+		// 初始放置认领：拖放时设计器可能在首次 Tick 之前就把槽写到落点（SynchronizeProperties
+		// 已跑过），若只采纳基准会把落点收下、数据留在默认位置（松手跳回原点）。
+		// 认领标记仍在时先平移数据到槽位置并正向对齐，再以对齐后的槽矩形为基准。
+		// 守卫限定设计器：UMG 设计器实例的 GetWorld() 返回编辑器世界（非空！），
+		// 用 !IsGameWorld() 放行编辑器/预览世界，只屏蔽 PIE/打包游戏。
+		if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
+		{
+			bPendingInitialPlacement = false;
+			const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
+			TranslateGeometryBy(RawMin - GetGeometryMin());
+			SyncSlotFromPoints();
+			CachedSlotPos = CanvasSlot->GetPosition();
+			CachedSlotSize = CanvasSlot->GetSize();
+		}
+		else
+		{
+			CachedSlotPos = RawPos;
+			CachedSlotSize = RawSize;
+		}
+		bPrevRawNegX = CachedSlotSize.X < 0.0;
+		bPrevRawNegY = CachedSlotSize.Y < 0.0;
 		return;
 	}
 
@@ -198,6 +263,18 @@ void USCADAPolygonWidget::CheckSlotSync()
 			}
 #endif
 		}
+		return;
+	}
+
+	// 初始放置认领（设计器在首次同步之后才把槽写到落点，未经属性通知）：
+	// 平移数据到槽位置并正向对齐，不做映射。守卫限定设计器（编辑器/预览世界放行，
+	// PIE/打包游戏屏蔽），防止运行时外部代码改槽位置时误触发平移。
+	if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
+	{
+		bPendingInitialPlacement = false;
+		const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
+		TranslateGeometryBy(RawMin - GetGeometryMin());
+		SyncSlotFromPoints();
 		return;
 	}
 

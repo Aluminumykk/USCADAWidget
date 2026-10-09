@@ -9,8 +9,6 @@
 
 #define LOCTEXT_NAMESPACE "USCADAWidget"
 
-// 临时调试日志（排查编译时槽同步路径，定位后移除）
-
 TSharedRef<SWidget> USCADACircleWidget::RebuildWidget()
 {
 	MyCircle = SNew(SSCADAEllipse);
@@ -113,6 +111,16 @@ void USCADACircleWidget::SnapPropertiesToPixel()
 	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 1.0f);
 }
 
+FVector2D USCADACircleWidget::GetGeometryMin() const
+{
+	return Center - FVector2D(Radius, Radius);
+}
+
+void USCADACircleWidget::TranslateGeometryBy(const FVector2D& Delta)
+{
+	Center += Delta;
+}
+
 void USCADACircleWidget::SyncSlotFromGeometry()
 {
 	if (bSyncingGeometry)
@@ -192,8 +200,25 @@ void USCADACircleWidget::CheckSlotSync()
 	if (!bSlotCacheValid)
 	{
 		bSlotCacheValid = true;
-		CachedSlotPos = RawPos;
-		CachedSlotSize = RawSize;
+		// 初始放置认领：拖放时设计器可能在首次 Tick 之前就把槽写到落点（SynchronizeProperties
+		// 已跑过），若只采纳基准会把落点收下、数据留在默认位置（松手跳回原点）。
+		// 认领标记仍在时先平移数据到槽位置并正向对齐，再以对齐后的槽矩形为基准。
+		// 守卫限定设计器：UMG 设计器实例的 GetWorld() 返回编辑器世界（非空！），
+		// 用 !IsGameWorld() 放行编辑器/预览世界，只屏蔽 PIE/打包游戏。
+		if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
+		{
+			bPendingInitialPlacement = false;
+			const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
+			TranslateGeometryBy(RawMin - GetGeometryMin());
+			SyncSlotFromGeometry();
+			CachedSlotPos = CanvasSlot->GetPosition();
+			CachedSlotSize = CanvasSlot->GetSize();
+		}
+		else
+		{
+			CachedSlotPos = RawPos;
+			CachedSlotSize = RawSize;
+		}
 		bPrevRawNegX = RawSize.X < 0.0;
 		bPrevRawNegY = RawSize.Y < 0.0;
 		// 编译/重建可能把 SynchronizeProperties 跑在槽挂上或槽位置恢复之前，
@@ -227,6 +252,21 @@ void USCADACircleWidget::CheckSlotSync()
 			}
 #endif
 		}
+		return;
+	}
+
+	// 初始放置认领（设计器在首次同步之后才把槽写到落点，未经属性通知）：
+	// 平移数据到槽位置并正向对齐，不做映射。守卫限定设计器（编辑器/预览世界放行，
+	// PIE/打包游戏屏蔽），防止运行时外部代码改槽位置时误触发平移。
+	if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
+	{
+		bPendingInitialPlacement = false;
+		// 消耗 ForceSyncFromSlotRect 置的一次性授权：若被认领先消耗不掉，
+		// 下一次后台重写会被误判成授权输入。
+		bSlotRemapAuthorized = false;
+		const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
+		TranslateGeometryBy(RawMin - GetGeometryMin());
+		SyncSlotFromGeometry();
 		return;
 	}
 

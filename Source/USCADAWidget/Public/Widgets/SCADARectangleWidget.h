@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/Widget.h"
+#include "Containers/Ticker.h"
 #include "SCADATypes.h"
 #include "SCADARectangleWidget.generated.h"
 
@@ -111,12 +112,21 @@ protected:
 	virtual void SynchronizeProperties() override;
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
 
+public:
+	virtual void BeginDestroy() override;
+
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual const FText GetPaletteCategory() override;
 #endif
 
 private:
+	/** 注册核心 Ticker（幂等）：UMG 设计器双实例（archetype Outer=WidgetTree 无 Slate /
+	 *  预览 Outer=WidgetTree_0 有 Slate）都可能单独收到槽写入——尤其面板拖放的落点只静默
+	 *  写在 archetype 槽上且 archetype 的 Slate 不 Tick，没有核心 Ticker 就永远认领不到落点。
+	 *  RebuildWidget/ForceSyncFromSlotRect 惰性注册，BeginDestroy 注销 */
+	void EnsureCoreTicker();
+
 	/** 把尺寸/圆角同步给 Slate 层（位置由槽位置决定，本地矩形恒为 (0,0,Size)） */
 	void PushGeometryToSlate();
 
@@ -125,6 +135,12 @@ private:
 
 	/** 矩形 → 槽矩形（编辑位置/尺寸后调用） */
 	void SyncSlotFromGeometry();
+
+	/** 几何数据包围盒左上角（初始放置认领用） */
+	FVector2D GetGeometryMin() const;
+
+	/** 几何数据整体平移（初始放置认领用） */
+	void TranslateGeometryBy(const FVector2D& Delta);
 
 	/** 由 Slate 层每帧回调：检测设计器拖动/拉伸。槽永远保持正向规范矩形；
 	 *  映射在规范空间增量进行；矩形在自身内镜像 = 自身，翻转沿为 no-op；
@@ -139,6 +155,9 @@ private:
 	/** 缓存是否已初始化。未初始化时首次 Tick 只采纳当前槽矩形为基准（不映射），
 	 *  否则默认 1x1 缓存会被当成一次从 1x1 开始的"拖动"，尺寸被爆炸性放大 */
 	bool bSlotCacheValid = false;
+	/** 初始放置认领标记：新实例首次发现槽位置与几何数据不一致时（设计器拖放落点），
+	 *  把几何数据平移到槽位置而不是把槽拉回数据原点；认领后或首次映射时复位 */
+	bool bPendingInitialPlacement = true;
 	/** 上一帧设计器原始槽尺寸的符号（跟踪符号基线；交互结束时复位。矩形镜像 = 自身，不产生实际映射） */
 	bool bPrevRawNegX = false;
 	bool bPrevRawNegY = false;
@@ -148,6 +167,8 @@ private:
 	bool bInteractionModified = false;
 	/** 防止双向同步互相触发 */
 	bool bSyncingGeometry = false;
+	/** 核心 Ticker 句柄（EnsureCoreTicker 注册，BeginDestroy 注销） */
+	FTSTicker::FDelegateHandle CoreTickerHandle;
 
 protected:
 	TSharedPtr<SSCADARectangle> MyRectangle;

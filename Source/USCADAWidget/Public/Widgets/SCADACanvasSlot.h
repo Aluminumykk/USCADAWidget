@@ -20,6 +20,12 @@ public:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
+
+	/** 设计器面板拖放/拖过预览的落点写入通道（引擎在 OnDrop/OnDragOver 时调用，
+	 *  直接 SetPosition/SetSize 不走属性通知）——转发给内容控件让其同步认领落点 */
+	virtual bool DragDropPreviewByDesigner(const FVector2D& LocalCursorPosition, const TOptional<int32>& XGridSnapSize, const TOptional<int32>& YGridSnapSize) override;
+	/** 设计器方向键微调通道（同样不走属性通知）——转发给内容控件 */
+	virtual bool NudgeByDesigner(const FVector2D& NudgeDirection, const TOptional<int32>& GridSnapSize) override;
 #endif
 
 	/** 槽矩形发生变化后通知内容控件（如 USCADALineWidget 回写端点坐标） */

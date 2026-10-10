@@ -9,6 +9,7 @@
 #include "SCADALineWidget.generated.h"
 
 class SSCADALine;
+class UCanvasPanelSlot;
 
 /**
  * SCADA 直线控件：只有起点和终点（对应 WinCC 的“线”对象）。
@@ -134,8 +135,16 @@ private:
 
 	/** 由 Slate 层每帧回调：检测设计器拖动/拉伸。槽永远保持正向规范矩形；
 	 *  映射在规范空间增量进行；翻转 = 原始尺寸符号变化沿 → 矩形内镜像一次；
-	 *  交互结束（槽稳定且鼠标松开）才取整/标脏/复位符号基线 */
+	 *  交互结束（槽稳定且鼠标松开）才取整/标脏/复位符号基线；
+	 *  横平竖直（单轴退化）交互走端点跟随映射（见 MapDegenerateSlotRect） */
 	void CheckSlotSync();
+
+	/** 单轴退化（水平/竖直线）槽拖动映射：整体平移 / 被抓角对应侧端点跟随，
+	 *  另一端点为基准不动（缩放映射对两个等偏移端点恒映射到同一边，线永远拉不斜） */
+	void MapDegenerateSlotRect(UCanvasPanelSlot* CanvasSlot, const FVector2D& RawPos, const FVector2D& RawSize);
+
+	/** 槽写回端点包围盒规范矩形 + 更新缓存 + 推送 Slate（退化映射各分支共用收尾） */
+	void WriteBackBoundsSlot(UCanvasPanelSlot* CanvasSlot);
 
 private:
 	/** 上次写入槽的规范矩形（min 位置 + 正尺寸；槽永远保持正向，布局不受负尺寸影响）。
@@ -157,6 +166,20 @@ private:
 	bool bInteractionModified = false;
 	/** 防止双向同步互相触发 */
 	bool bSyncingGeometry = false;
+	/** 交互起点簿记（横平竖直退化拖动的基准；交互首帧取样 = 设计器 StartingOffsets
+	 *  快照——STransformHandle::Resize 每帧从该快照绝对重写槽矩形，非增量） */
+	FVector2D InteractionStartPos = FVector2D::ZeroVector;
+	FVector2D InteractionStartSize = FVector2D(1.0, 1.0);
+	/** 交互起始时两端点副本（端点跟随的绝对基准，避免帧间累积误差） */
+	FVector2D StartPointAtInteractionStart = FVector2D::ZeroVector;
+	FVector2D EndPointAtInteractionStart = FVector2D(100.0, 100.0);
+	/** 本次交互是否锁定单轴退化（水平/竖直线）端点跟随模式（交互首帧判定，交互内不变） */
+	bool bDegenerateDrag = false;
+	/** 退化模式轴向：true = 水平线（Y 跨度 0，按 X 侧选目标端点）；false = 竖直线 */
+	bool bDegenerateDragHorizontal = false;
+	/** 退化模式目标端点（0=StartPoint，1=EndPoint，-1=未锁定；
+	 *  锁前不动单端点，锁定时两端必未交叉） */
+	int8 DegenerateTarget = -1;
 	/** 核心 Ticker 句柄（EnsureCoreTicker 注册，BeginDestroy 注销） */
 	FTSTicker::FDelegateHandle CoreTickerHandle;
 

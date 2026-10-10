@@ -25,8 +25,12 @@ class USCADAWIDGET_API USCADAPolylineWidget : public UWidget
 	GENERATED_BODY()
 
 public:
-	/** 折线点位（画布设计坐标），按数组顺序依次连接 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline")
+	/** 折线点位（画布设计坐标），按数组顺序依次连接。
+	 *  数组增点（+ 追加 = 终点增；元素右键 Insert 到 0 = 起点增）时新点自动
+	 *  沿就近线段延长 100px（见 PostEditChangeProperty），不再落在原点。
+	 *  Delta/LinearDeltaSensitivity：细节面板数值拖动恒为 1 单位/像素
+	 *  （默认拖动速度与数值大小成正比，坐标上百时过快）。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	TArray<FVector2D> Points = { FVector2D(0.0, 100.0), FVector2D(50.0, 0.0), FVector2D(100.0, 100.0) };
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline")
@@ -112,6 +116,7 @@ private:
 	void EnsureCoreTicker();
 
 #if WITH_EDITOR
+	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual const FText GetPaletteCategory() override;
 #endif
@@ -162,6 +167,19 @@ private:
 	bool bSyncingGeometry = false;
 	/** 核心 Ticker 句柄（EnsureCoreTicker 注册，BeginDestroy 注销） */
 	FTSTicker::FDelegateHandle CoreTickerHandle;
+
+#if WITH_EDITOR
+	/** 上次已知的 Points 快照：检测数组增点（新元素插入位置 diff 用）。
+	 *  PreEditChange 变更前取样（模板实例可能从不跑 SynchronizeProperties），
+	 *  PostEditChangeProperty 处理完刷新 */
+	TArray<FVector2D> PointsSnapshot;
+	bool bPointsSnapshotValid = false;
+
+	/** 数组增点后把新元素从默认 (0,0) 移到"沿就近线段延长 100px"处：
+	 *  末尾追加 = 沿最后一段向前延长；开头插入 = 沿第一段反向延长；
+	 *  中间插入 = 取两邻点中点（共线，不改变现有形状） */
+	void RepositionNewlyInsertedPoint(int32 InsertIndex);
+#endif
 
 protected:
 	TSharedPtr<SSCADALine> MyPolyline;

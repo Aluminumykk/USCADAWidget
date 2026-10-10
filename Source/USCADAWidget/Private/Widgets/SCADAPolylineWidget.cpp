@@ -446,22 +446,116 @@ void USCADAPolylineWidget::RemovePointAtIndex(int32 Index)
 }
 
 #if WITH_EDITOR
+void USCADAPolylineWidget::PreEditChange(FProperty* PropertyAboutToChange)
+{
+	// 数组增点检测的基准快照必须在变更前取样（细节面板编辑的是模板实例，
+	// 它可能从不跑 SynchronizeProperties，不能指望别处初始化）。
+	// 任何属性变更都刷新：代价是小数组拷贝，换来 Points 结构变化前必有有效基准。
+	PointsSnapshot = Points;
+	bPointsSnapshotValid = true;
+
+	Super::PreEditChange(PropertyAboutToChange);
+}
+
 void USCADAPolylineWidget::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
+	// 注意要查 MemberProperty：编辑数组元素时 Property 是内层的 FVector2D::X/Y，
+	// 只有 MemberProperty（所属成员）才是 Points 本身。
+	const FName MemberPropName = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty->GetFName() : NAME_None;
+	const bool bPointsChanged = MemberPropName == GET_MEMBER_NAME_CHECKED(USCADAPolylineWidget, Points);
+
+	// 数组增点（+ 追加 = 终点增；元素右键 Insert = 起点增/中间插）：
+	// 新元素默认落在 (0,0)（离画布太远），按快照 diff 找出插入位置，
+	// 把它移到"沿就近线段延长 100px"处。Duplicate（复制元素）保留原位不改。
+	if (bPointsChanged && bPointsSnapshotValid &&
+		Points.Num() == PointsSnapshot.Num() + 1 &&
+		(PropertyChangedEvent.ChangeType & EPropertyChangeType::Duplicate) == 0)
+	{
+		// 找插入位置 k：去掉新数组第 k 个元素后与快照逐项相等（取首个可行 k，
+		// 新元素与邻点重合的歧义场景任选其一，结果位置几乎相同）
+		int32 InsertIndex = INDEX_NONE;
+		for (int32 k = 0; k <= PointsSnapshot.Num(); ++k)
+		{
+			bool bMatches = true;
+			for (int32 i = 0; i < PointsSnapshot.Num(); ++i)
+			{
+				const int32 j = (i < k) ? i : i + 1;
+				if (!Points[j].Equals(PointsSnapshot[i]))
+				{
+					bMatches = false;
+					break;
+				}
+			}
+			if (bMatches)
+			{
+				InsertIndex = k;
+				break;
+			}
+		}
+		if (InsertIndex != INDEX_NONE)
+		{
+			RepositionNewlyInsertedPoint(InsertIndex);
+		}
+	}
+	if (bPointsChanged)
+	{
+		PointsSnapshot = Points;
+	}
+
 	// 编辑器属性面板输入完成后立即取整，面板显示值即为最终绘制值
+	// （增点重定位在取整之前，新点一并被取整）
 	SnapPropertiesToPixel();
 
 	// 点位坐标被编辑 → 槽矩形（X/Y/宽/高）同步更新（须在 Super 之前，
 	// Super 链上的 SynchronizeProperties 以槽为准回写，槽先更新才不会把新值冲掉）。
-	// 注意要查 MemberProperty：编辑数组元素时 Property 是内层的 FVector2D::X/Y，
-	// 只有 MemberProperty（所属成员）才是 Points 本身。
-	const FName MemberPropName = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty->GetFName() : NAME_None;
-	if (MemberPropName == GET_MEMBER_NAME_CHECKED(USCADAPolylineWidget, Points))
+	if (bPointsChanged)
 	{
 		SyncSlotFromPoints();
 	}
 
 	Super::PostEditChangeProperty(PropertyChangedEvent);
+}
+
+void USCADAPolylineWidget::RepositionNewlyInsertedPoint(int32 InsertIndex)
+{
+	const int32 N = Points.Num();
+	if (N < 2 || !Points.IsValidIndex(InsertIndex))
+	{
+		return;
+	}
+
+	constexpr float ExtendDistance = 100.0f;
+	FVector2D NewPos;
+
+	if (InsertIndex == N - 1)
+	{
+		// 终点增：沿最后一段方向向前延长（N>=3 有真实线段；N==2 只有一个旧点，退回 +X）
+		const FVector2D& Tip = Points[N - 2];
+		FVector2D Dir(N >= 3 ? Tip - Points[N - 3] : FVector2D(1.0, 0.0));
+		if (Dir.IsNearlyZero())
+		{
+			Dir = FVector2D(1.0, 0.0);
+		}
+		NewPos = Tip + Dir.GetSafeNormal() * ExtendDistance;
+	}
+	else if (InsertIndex == 0)
+	{
+		// 起点增：沿第一段方向反向延长（N>=3 有真实线段；N==2 只有一个旧点，退回 -X）
+		const FVector2D& Head = Points[1];
+		FVector2D Dir(N >= 3 ? Head - Points[2] : FVector2D(-1.0, 0.0));
+		if (Dir.IsNearlyZero())
+		{
+			Dir = FVector2D(-1.0, 0.0);
+		}
+		NewPos = Head + Dir.GetSafeNormal() * ExtendDistance;
+	}
+	else
+	{
+		// 中间插入：取两邻点中点（共线，不改变现有形状；规范未定义，取最直观语义）
+		NewPos = (Points[InsertIndex - 1] + Points[InsertIndex + 1]) * 0.5;
+	}
+
+	Points[InsertIndex] = NewPos;
 }
 
 const FText USCADAPolylineWidget::GetPaletteCategory()

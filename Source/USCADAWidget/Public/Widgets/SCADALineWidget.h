@@ -24,12 +24,14 @@ class USCADAWIDGET_API USCADALineWidget : public UWidget
 	GENERATED_BODY()
 
 public:
-	/** 线起始端坐标（画布本地坐标） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Line")
+	/** 线起始端坐标（画布本地坐标）。
+	 *  Delta/LinearDeltaSensitivity：细节面板数值拖动恒为 1 单位/像素
+	 *  （默认拖动速度与数值大小成正比，坐标上百时过快）。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Line", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	FVector2D StartPoint = FVector2D(0.0, 0.0);
 
 	/** 线端（终点）坐标（画布本地坐标）。默认从左上到右下的斜线，跨度 100 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Line")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Line", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	FVector2D EndPoint = FVector2D(100.0, 100.0);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Line")

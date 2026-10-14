@@ -14,7 +14,8 @@ class UWidget;
 
 /**
  * UMG 设计器扩展：选中 SCADA 图元时在画布上为每个可拖点显示手柄，直接拖动修改坐标。
- * 支持：折线（每个折点 Points[i]）、线段（StartPoint/EndPoint 两端点，索引 0/1）。
+ * 支持：折线/多边形（每个顶点 Points[i]，多边形顶点编辑方式与折线完全一致）、
+ * 线段（StartPoint/EndPoint 两端点，索引 0/1）。
  *
  * 机制仿引擎内置 FCanvasSlotExtension（锚点 gizmo）：
  * - ExtendSelection 向设计器表面添加 FDesignerSurfaceElement（RelativeFromParent），

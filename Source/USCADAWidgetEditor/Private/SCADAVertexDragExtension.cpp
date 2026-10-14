@@ -4,6 +4,7 @@
 
 #include "Widgets/SCADACanvasWidget.h"
 #include "Widgets/SCADALineWidget.h"
+#include "Widgets/SCADAPolygonWidget.h"
 #include "Widgets/SCADAPolylineWidget.h"
 
 #include "Components/Widget.h"
@@ -29,7 +30,7 @@ bool FSCADAVertexDragExtension::CanExtendSelection(const TArray<FWidgetReference
 	}
 	const UWidget* Template = Selection[0].GetTemplate();
 	return Template != nullptr &&
-		(Template->IsA<USCADAPolylineWidget>() || Template->IsA<USCADALineWidget>());
+		(Template->IsA<USCADAPolylineWidget>() || Template->IsA<USCADALineWidget>() || Template->IsA<USCADAPolygonWidget>());
 }
 
 void FSCADAVertexDragExtension::ExtendSelection(const TArray<FWidgetReference>& Selection, TArray<TSharedRef<FDesignerSurfaceElement>>& SurfaceElements)
@@ -84,6 +85,10 @@ int32 FSCADAVertexDragExtension::GetVertexCount() const
 	{
 		return Polyline->Points.Num();
 	}
+	if (const USCADAPolygonWidget* Polygon = Cast<USCADAPolygonWidget>(GetTemplateWidget()))
+	{
+		return Polygon->Points.Num();
+	}
 	if (GetTemplateWidget() != nullptr && GetTemplateWidget()->IsA<USCADALineWidget>())
 	{
 		return 2;
@@ -98,6 +103,15 @@ bool FSCADAVertexDragExtension::GetVertex(int32 Index, FVector2D& OutDesignPos) 
 		if (Polyline->Points.IsValidIndex(Index))
 		{
 			OutDesignPos = Polyline->Points[Index];
+			return true;
+		}
+		return false;
+	}
+	if (const USCADAPolygonWidget* Polygon = Cast<USCADAPolygonWidget>(GetTemplateWidget()))
+	{
+		if (Polygon->Points.IsValidIndex(Index))
+		{
+			OutDesignPos = Polygon->Points[Index];
 			return true;
 		}
 		return false;
@@ -127,6 +141,16 @@ void FSCADAVertexDragExtension::SetVertexOnInstance(UWidget* Widget, int32 Index
 			TArray<FVector2D> NewPoints = Polyline->Points;
 			NewPoints[Index] = NewDesignPos;
 			Polyline->SetPoints(NewPoints);
+		}
+		return;
+	}
+	if (USCADAPolygonWidget* Polygon = Cast<USCADAPolygonWidget>(Widget))
+	{
+		if (Polygon->Points.IsValidIndex(Index))
+		{
+			TArray<FVector2D> NewPoints = Polygon->Points;
+			NewPoints[Index] = NewDesignPos;
+			Polygon->SetPoints(NewPoints);
 		}
 		return;
 	}

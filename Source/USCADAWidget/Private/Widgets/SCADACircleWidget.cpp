@@ -108,7 +108,7 @@ void USCADACircleWidget::SnapPropertiesToPixel()
 	Center.X = FMath::RoundToFloat(Center.X);
 	Center.Y = FMath::RoundToFloat(Center.Y);
 	Radius = FMath::Max(FMath::RoundToFloat(Radius), 1.0f);
-	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 1.0f);
+	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 }
 
 FVector2D USCADACircleWidget::GetGeometryMin() const

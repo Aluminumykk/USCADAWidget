@@ -114,7 +114,7 @@ void USCADAPolygonWidget::SnapPropertiesToPixel()
 		P.X = FMath::RoundToFloat(P.X);
 		P.Y = FMath::RoundToFloat(P.Y);
 	}
-	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 1.0f);
+	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 }
 
 void USCADAPolygonWidget::GetPointsBounds(FVector2D& OutMin, FVector2D& OutMax) const
@@ -435,22 +435,87 @@ void USCADAPolygonWidget::RemovePointAtIndex(int32 Index)
 }
 
 #if WITH_EDITOR
+void USCADAPolygonWidget::PreEditChange(FProperty* PropertyAboutToChange)
+{
+	// 数组增点检测的基准快照必须在变更前取样（细节面板编辑的是模板实例，
+	// 它可能从不跑 SynchronizeProperties，不能指望别处初始化）。
+	// 任何属性变更都刷新：代价是小数组拷贝，换来 Points 结构变化前必有有效基准。
+	PointsSnapshot = Points;
+	bPointsSnapshotValid = true;
+
+	Super::PreEditChange(PropertyAboutToChange);
+}
+
 void USCADAPolygonWidget::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
+	// 注意要查 MemberProperty：编辑数组元素时 Property 是内层的 FVector2D::X/Y，
+	// 只有 MemberProperty（所属成员）才是 Points 本身。
+	const FName MemberPropName = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty->GetFName() : NAME_None;
+	const bool bPointsChanged = MemberPropName == GET_MEMBER_NAME_CHECKED(USCADAPolygonWidget, Points);
+
+	// 数组增点（+ 追加 / 元素右键 Insert）：新元素默认落在 (0,0)（离画布太远），
+	// 按快照 diff 找出插入位置，把新点移到两邻点中点（落在被插入的边上）。
+	// Duplicate（复制元素）保留原位不改。与折线同一套检测逻辑。
+	if (bPointsChanged && bPointsSnapshotValid &&
+		Points.Num() == PointsSnapshot.Num() + 1 &&
+		(PropertyChangedEvent.ChangeType & EPropertyChangeType::Duplicate) == 0)
+	{
+		// 找插入位置 k：去掉新数组第 k 个元素后与快照逐项相等（取首个可行 k，
+		// 新元素与邻点重合的歧义场景任选其一，结果位置几乎相同）
+		int32 InsertIndex = INDEX_NONE;
+		for (int32 k = 0; k <= PointsSnapshot.Num(); ++k)
+		{
+			bool bMatches = true;
+			for (int32 i = 0; i < PointsSnapshot.Num(); ++i)
+			{
+				const int32 j = (i < k) ? i : i + 1;
+				if (!Points[j].Equals(PointsSnapshot[i]))
+				{
+					bMatches = false;
+					break;
+				}
+			}
+			if (bMatches)
+			{
+				InsertIndex = k;
+				break;
+			}
+		}
+		if (InsertIndex != INDEX_NONE)
+		{
+			RepositionNewlyInsertedPoint(InsertIndex);
+		}
+	}
+	if (bPointsChanged)
+	{
+		PointsSnapshot = Points;
+	}
+
 	// 编辑器属性面板输入完成后立即取整，面板显示值即为最终绘制值
+	// （增点重定位在取整之前，新点一并被取整）
 	SnapPropertiesToPixel();
 
 	// 点位坐标被编辑 → 槽矩形（X/Y/宽/高）同步更新（须在 Super 之前，
 	// Super 链上的 SynchronizeProperties 以槽为准回写，槽先更新才不会把新值冲掉）。
-	// 注意要查 MemberProperty：编辑数组元素时 Property 是内层的 FVector2D::X/Y，
-	// 只有 MemberProperty（所属成员）才是 Points 本身。
-	const FName MemberPropName = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty->GetFName() : NAME_None;
-	if (MemberPropName == GET_MEMBER_NAME_CHECKED(USCADAPolygonWidget, Points))
+	if (bPointsChanged)
 	{
 		SyncSlotFromPoints();
 	}
 
 	Super::PostEditChangeProperty(PropertyChangedEvent);
+}
+
+void USCADAPolygonWidget::RepositionNewlyInsertedPoint(int32 InsertIndex)
+{
+	const int32 N = Points.Num();
+	// 闭合多边形：新点取两邻点中点（环形索引，插入首部时前邻 = 末点），
+	// 落在被插入的那条边上，不改变现有轮廓形状
+	if (N >= 3 && Points.IsValidIndex(InsertIndex))
+	{
+		const FVector2D& Prev = Points[(InsertIndex - 1 + N) % N];
+		const FVector2D& Next = Points[(InsertIndex + 1) % N];
+		Points[InsertIndex] = (Prev + Next) * 0.5;
+	}
 }
 
 const FText USCADAPolygonWidget::GetPaletteCategory()

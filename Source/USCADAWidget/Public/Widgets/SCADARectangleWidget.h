@@ -47,8 +47,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle")
 	FLinearColor BorderColor = FLinearColor(156.0f / 255.0f, 154.0f / 255.0f, 165.0f / 255.0f, 1.0f);
 
-	/** 边框宽度 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (ClampMin = "1.0"))
+	/** 边框宽度（0 = 不画边框；边框向图形内部绘制，外轮廓尺寸不随边宽变化） */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (ClampMin = "0.0"))
 	float Thickness = 1.0f;
 
 	/** 边框线型（实线/虚线/点/点划线/双点划线） */

@@ -26,16 +26,20 @@ class USCADAWIDGET_API USCADAPolygonWidget : public UWidget
 	GENERATED_BODY()
 
 public:
-	/** 多边形顶点（画布设计坐标），按数组顺序连接并首尾闭合 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polygon")
+	/** 多边形顶点（画布设计坐标），按数组顺序连接并首尾闭合。
+	 *  数组增点（+ 追加 / 元素右键 Insert）时新点自动取两邻点中点（落在被插入的边上，
+	 *  闭合环形索引），不再落在 (0,0)，见 PostEditChangeProperty。
+	 *  Delta/LinearDeltaSensitivity：细节面板数值拖动恒为 1 单位/像素
+	 *  （默认拖动速度与数值大小成正比，坐标上百时过快）。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polygon", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	TArray<FVector2D> Points = { FVector2D(0.0, 100.0), FVector2D(50.0, 0.0), FVector2D(100.0, 100.0) };
 
 	/** 边框颜色 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polygon")
 	FLinearColor BorderColor = FLinearColor(156.0f / 255.0f, 154.0f / 255.0f, 165.0f / 255.0f, 1.0f);
 
-	/** 边框宽度 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polygon", meta = (ClampMin = "1.0"))
+	/** 边框宽度（0 = 不画边框；边框向图形内部绘制，外轮廓尺寸不随边宽变化） */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polygon", meta = (ClampMin = "0.0"))
 	float Thickness = 1.0f;
 
 	/** 边框线型（实线/虚线/点/点划线/双点划线） */
@@ -109,6 +113,7 @@ private:
 	void EnsureCoreTicker();
 
 #if WITH_EDITOR
+	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual const FText GetPaletteCategory() override;
 #endif
@@ -159,6 +164,18 @@ private:
 	bool bSyncingGeometry = false;
 	/** 核心 Ticker 句柄（EnsureCoreTicker 注册，BeginDestroy 注销） */
 	FTSTicker::FDelegateHandle CoreTickerHandle;
+
+#if WITH_EDITOR
+	/** 上次已知的 Points 快照：检测数组增点（新元素插入位置 diff 用）。
+	 *  PreEditChange 变更前取样（模板实例可能从不跑 SynchronizeProperties），
+	 *  PostEditChangeProperty 处理完刷新 */
+	TArray<FVector2D> PointsSnapshot;
+	bool bPointsSnapshotValid = false;
+
+	/** 数组增点后把新元素从默认 (0,0) 移到两邻点中点（闭合环形索引：新点落在
+	 *  被插入的那条边上，不改变现有轮廓形状；多边形闭合无"起点/终点"之分） */
+	void RepositionNewlyInsertedPoint(int32 InsertIndex);
+#endif
 
 protected:
 	TSharedPtr<SSCADAPolygon> MyPolygon;

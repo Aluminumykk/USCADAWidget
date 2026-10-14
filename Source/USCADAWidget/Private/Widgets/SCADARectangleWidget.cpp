@@ -106,7 +106,7 @@ void USCADARectangleWidget::SnapPropertiesToPixel()
 	const float MaxR = (float)FMath::Min(Size.X, Size.Y) * 0.5f;
 	CornerRadiusX = FMath::Clamp(FMath::RoundToFloat(CornerRadiusX), 0.0f, MaxR);
 	CornerRadiusY = FMath::Clamp(FMath::RoundToFloat(CornerRadiusY), 0.0f, MaxR);
-	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 1.0f);
+	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 }
 
 FVector2D USCADARectangleWidget::GetGeometryMin() const

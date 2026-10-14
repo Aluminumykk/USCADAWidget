@@ -101,7 +101,7 @@ void USCADAEllipseWidget::SnapPropertiesToPixel()
 	Center.Y = FMath::RoundToFloat(Center.Y);
 	RadiusX = FMath::Max(FMath::RoundToFloat(RadiusX), 1.0f);
 	RadiusY = FMath::Max(FMath::RoundToFloat(RadiusY), 1.0f);
-	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 1.0f);
+	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 }
 
 FVector2D USCADAEllipseWidget::GetGeometryMin() const

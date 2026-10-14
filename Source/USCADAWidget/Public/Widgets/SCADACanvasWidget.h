@@ -3,20 +3,26 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/PanelWidget.h"
+#include "Components/CanvasPanel.h"
 #include "SCADACanvasWidget.generated.h"
 
 class SSCADACanvas;
-class UCanvasPanelSlot;
 
 /**
- * SCADA 画布面板：画面配置的容器基座，与 UMG Canvas Panel 同款槽（UCanvasPanelSlot），
- * 子控件以绝对设计坐标定位、可在设计器中自由拖动。
+ * SCADA 画布面板：画面配置的容器基座，子控件以绝对设计坐标定位、可在设计器中自由拖动。
  * 支持可选背景网格与缩放系数。
- * 后续扩展：图元吸附网格、属性绑定。
+ *
+ * **必须继承 UCanvasPanel（而非 UPanelWidget）**：设计器的一批机制对父面板做
+ * `Cast<UCanvasPanel>(Parent)` 硬转换——`UCanvasPanelSlot::SaveBaseLayout/RebaseLayout`
+ * （本体拖动 MoveWidgets 写位置全靠它，转换失败则静默 no-op = 画布内任何控件都拖不动）、
+ * `GetGeometryForSlot`、锚点 gizmo（FCanvasSlotExtension）等。继承 UPanelWidget 会让这些
+ * 全部失效且无报错。LockToPanelOnDrag（拖动=原位移动而非换父级）也由基类提供。
+ *
+ * 与基类的差异：Slate 层换成 SSCADACanvas（网格 + Zoom 整体缩放），槽类换成
+ * USCADACanvasSlot（槽变更时把几何回写到图元数据）。
  */
 UCLASS(meta = (DisplayName = "SCADA Canvas", Category = "SCADA"))
-class USCADAWIDGET_API USCADACanvasWidget : public UPanelWidget
+class USCADAWIDGET_API USCADACanvasWidget : public UCanvasPanel
 {
 	GENERATED_BODY()
 
@@ -36,8 +42,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Canvas", meta = (ClampMin = "0.1"))
 	float Zoom = 1.0f;
 
-	UFUNCTION(BlueprintCallable, Category = "SCADA|Canvas")
-	UCanvasPanelSlot* AddChildToCanvas(UWidget* Content);
+	// AddChildToCanvas 直接用基类版本：内部走虚函数 GetSlotClass() → USCADACanvasSlot，行为一致
 
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Canvas")
 	void SetShowGrid(bool bInShowGrid);
@@ -51,11 +56,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Canvas")
 	void SetZoom(float InZoom);
 
-	//~ UPanelWidget
-	virtual void OnSlotAdded(UPanelSlot* InSlot) override;
-	virtual void OnSlotRemoved(UPanelSlot* InSlot) override;
-	//~ End of UPanelWidget
-
 protected:
 	//~ UPanelWidget
 	virtual UClass* GetSlotClass() const override;
@@ -64,13 +64,15 @@ protected:
 	//~ UWidget
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void SynchronizeProperties() override;
-	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
 	//~ End of UWidget
+	// OnSlotAdded/OnSlotRemoved/ReleaseSlateResources 与基类实现一致，直接继承
 
 #if WITH_EDITOR
 	virtual const FText GetPaletteCategory() override;
 #endif
 
-protected:
-	TSharedPtr<SSCADACanvas> MyCanvas;
+private:
+	/** 基类 MyCanvas（TSharedPtr<SConstraintCanvas>）由 RebuildWidget 创建为 SSCADACanvas，
+	 *  取类型化指针（网格/Zoom 接口） */
+	TSharedPtr<SSCADACanvas> GetSCADACanvas() const;
 };

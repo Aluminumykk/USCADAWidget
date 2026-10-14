@@ -9,7 +9,7 @@ class IDesignerExtensionFactory;
 
 /**
  * USCADAWidget 编辑器模块：向 UMG 设计器注册 SCADA 图元的设计器交互扩展
- * （当前：折线顶点直接拖动手柄，见 FSCADAPolylineVertexExtension）。
+ * （当前：折线折点/线段端点直接拖动手柄，见 FSCADAVertexDragExtension）。
  * Editor-only，不参与打包。
  */
 class FUSCADAWidgetEditorModule : public IModuleInterface

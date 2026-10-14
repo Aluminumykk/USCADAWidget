@@ -228,11 +228,16 @@ void USCADACircleWidget::CheckSlotSync()
 		return;
 	}
 
+	const bool bLeftMouseDown = FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton);
+
 	if (RawPos.Equals(CachedSlotPos) && RawSize.Equals(CachedSlotSize))
 	{
+		// 无新输入：作废未消耗的授权，避免遗留授权让下一次后台重写被误判成输入
+		bSlotRemapAuthorized = false;
+
 		// 设计器无新输入。鼠标左键仍按下 = 拖动中停顿，不收尾（保留符号沿状态）；
 		// 已松开 = 交互结束，收尾一次：取整、标脏、符号基线复位。
-		if (bPendingFinalize && !FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
+		if (bPendingFinalize && !bLeftMouseDown)
 		{
 			bPendingFinalize = false;
 			bInteractionModified = false;
@@ -252,6 +257,17 @@ void USCADACircleWidget::CheckSlotSync()
 			}
 #endif
 		}
+		else if (!bPendingFinalize && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
+		{
+			// 失配自愈：撤销/后台恢复只还原了数据或槽的一边时（槽=缓存=拖拽后、
+			// 数据=拖拽前），数据包围盒与缓存不一致 → 以数据为真值对齐槽。
+			const FVector2D BoundsMin = Center - FVector2D(Radius, Radius);
+			const FVector2D BoundsSize(FMath::Max(Radius * 2.0, 1.0), FMath::Max(Radius * 2.0, 1.0));
+			if (!BoundsMin.Equals(CachedSlotPos) || !BoundsSize.Equals(CachedSlotSize))
+			{
+				SyncSlotFromGeometry();
+			}
+		}
 		return;
 	}
 
@@ -270,12 +286,32 @@ void USCADACircleWidget::CheckSlotSync()
 		return;
 	}
 
+	// 撤销/还原识别（先于授权门闸）：槽与当前数据包围盒完全一致、但与缓存不同 =
+	// 外部整体还原（撤销经事务序列化同时恢复槽和数据，二者天然一致）→ 对齐缓存即可，
+	// 绝不可映射——映射会按缓存比例缩放这份一致状态导致数据爆炸（撤销走样根因）。
+	// 真实拖动/面板输入时槽与数据必然不一致（数据滞后于槽）不会误判；误判也无害：
+	// 槽==包围盒时映射本就是恒等变换。撤销经属性通知到达时授权位可能为真，故必须在门闸前。
+	{
+		const FVector2D DataMin = Center - FVector2D(Radius, Radius);
+		const FVector2D DataBoundsSize(FMath::Max(Radius * 2.0, 1.0), FMath::Max(Radius * 2.0, 1.0));
+		if (RawPos.Equals(DataMin) && RawSize.Equals(DataBoundsSize))
+		{
+			bPendingFinalize = false;
+			bInteractionModified = false;
+			bDragStartValid = false;
+			bDragModeLocked = false;
+			bCornerDrag = false;
+			bLastAnchorValidX = false;
+			bLastAnchorValidY = false;
+			SyncSlotFromGeometry();
+			return;
+		}
+	}
+
 	// 后台重写识别：鼠标未按下且未经属性面板授权（bSlotRemapAuthorized）的槽输入，
 	// 不是用户输入——是设计器后台重写（编译重建后恢复几何、松手提交拖拽矩形等）。
 	// 一律拒绝映射、以数据为真值对齐槽；否则拖边后编译时设计器重写的拖拽矩形会被误判成
 	// "平移"交互（锚已复位 → 圆心取矩形中心、半径取小边 = 拖动前的值），数据被改回去。
-	// 已知取舍：设计器里方向键微调控件（鼠标未按下、不走面板通知）也会被拒绝。
-	const bool bLeftMouseDown = FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton);
 	if (!bLeftMouseDown && !bSlotRemapAuthorized)
 	{
 		bPendingFinalize = false;

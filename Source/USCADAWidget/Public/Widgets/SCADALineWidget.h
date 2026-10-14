@@ -168,6 +168,10 @@ private:
 	bool bInteractionModified = false;
 	/** 防止双向同步互相触发 */
 	bool bSyncingGeometry = false;
+	/** 一次性映射授权：属性面板编辑/方向键微调等合法"鼠标未按下改槽"经
+	 *  NotifyContentSlotGeometryChanged → ForceSyncFromSlotRect 置位；撤销/编译等后台重写
+	 *  走事务序列化（不经通知通道）无授权 → CheckSlotSync 拒绝映射、以数据为真值对齐槽 */
+	bool bSlotRemapAuthorized = false;
 	/** 交互起点簿记（横平竖直退化拖动的基准；交互首帧取样 = 设计器 StartingOffsets
 	 *  快照——STransformHandle::Resize 每帧从该快照绝对重写槽矩形，非增量） */
 	FVector2D InteractionStartPos = FVector2D::ZeroVector;

@@ -6,6 +6,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 
 ### SCADA Canvas（画布）
 
+- 继承 `UCanvasPanel`：设计器内直接鼠标拖动、锚点 gizmo、网格吸附等原生画布交互全部可用。
 - 所有图元的容器，坐标一律使用**画布设计坐标**（左上角原点）。
 - 跨分辨率适配只调画布 `Zoom`：以左上角为原点对子内容整体渲染缩放，图元内部坐标与线宽、圆角、箭头全部等比跟随。
 - 可选设计网格（`bShowGrid` / `GridSize` / `GridColor`）。
@@ -18,17 +19,21 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - `LineStyle`：实线 / 虚线 / 点 / 点划线 / 双点划线（"画/空长度模式表"驱动，"点"为旋转实心方块）。
 - `LineStartStyle` / `LineEndStyle`：默认 / 实心箭头，起终点独立，箭头尺寸自适应线宽。
 - `LineCap`：无 / 圆形（端点实心圆盘，直径 = 线宽），与箭头互斥。
+- **横平竖直不再死锁**：水平/竖直的线拖角 = 对应侧端点跟随拉斜（拖左上 = 左端点上移），中点把手 = 整体平移。
 
 ### SCADA Polyline（折线）
 
 - `Points` 数组按顺序连接，复用 Line 的全部样式属性（线型 / 箭头 / 圆顶）。
 - 拐点圆连接（Round Join）：实线 = 原始折线 + 每个中间顶点直径 = 线宽的实心连接盘，任意角度连续无接缝；虚线沿圆弧流动划线模式。
+- **每个折点可在设计器中直接拖动手柄**编辑（编辑器模块 USCADAWidgetEditor）。
+- **数组增点自动定位**：`+` 追加 = 终点增、元素右键 Insert 到 0 = 起点增，新点沿就近线段延长 100px（不再落在原点）；中间插入取两邻点中点。
 
 ### SCADA Polygon（多边形）
 
 - `Points` 顶点数组，首尾自动闭合 + 填充，对照 WinCC「多边形」对象。
 - `FillColor` / `FillPattern`（实心 / 透明）：耳切三角化填充，支持凹多边形。
-- `BorderColor` / `Thickness` / `LineStyle`：闭合边框，虚线沿闭合环流动。
+- `BorderColor` / `Thickness` / `LineStyle`：闭合边框（**内画环带**，见下方"边线"通用说明）；虚线沿闭合环流动。
+- **每个顶点可在设计器中直接拖动手柄**；数组增点自动落在被插入的边中点（不落原点）。
 
 ### SCADA Ellipse（椭圆）
 
@@ -45,6 +50,13 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - `Position` / `Size` + `CornerRadiusX` / `CornerRadiusY`（圆角半径，0 = 直角）。
 - 边框颜色 / 宽度 / 线型 + 填充颜色 / 图案。
 
+### 边线（多边形 / 椭圆 / 圆 / 矩形通用）
+
+- **内画语义**：几何数据（顶点 / 半径 / 尺寸）= 外轮廓 = 视觉边界 = 槽包围盒；边框整体画在图形内部，外轮廓不随边宽变化。
+- **Thickness 允许 0** = 不画边框，且图形本体一点不小（不会"少一圈"）。
+- 实线边框 = 环带四边形条带：外环 = 原始轮廓（尖角精确到几何顶点）、内环 = 内缩 T 的轮廓，逐边两个三角形零缝隙——尖角不外露填充；填充与边框分层绘制，边框稳定压在填充之上。
+- **闪烁只切填充色**，边框保持本色（WinCC 语义：黑边白圆红闪 = 黑边红闪）。
+
 ### SCADA Text（文字）
 
 - 直接继承 `UTextBlock`：文字内容 / 字体 / 字号 / 对齐 / 换行等全部沿用 UE 内置能力。
@@ -54,13 +66,17 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 
 - 双向同步：图元几何数据是唯一真值，槽只是操作手柄；属性面板改坐标 → 槽跟随，设计器拖槽 → 坐标回写，编译/保存不丢数据。
 - 设计器交互：拖动平移、拉伸缩放、**拖过对边镜像翻转**（WinCC 式）、方向键 1px 微调，松手自动取整并记入一次撤销事务。
+- **顶点 / 端点直接拖动**：选中折线 / 多边形（每个顶点）或线段（两端点）后，画布上显示手柄直接拖动改坐标（撤销事务、双实例同步、取整）。由编辑器模块 `USCADAWidgetEditor` 的设计器扩展提供。
+- **细节面板数值拖动降速**：坐标属性拖动恒为 1 单位/鼠标像素（默认速度与数值大小成正比，坐标上百时过快）。
 - 闪烁：`bFlashEnabled` + `FlashColor`，全局统一 1 秒换相（墙钟驱动，所有图元天然同步），只切颜色；透明度 0 即隐藏。运行时同样生效。
 - 像素对齐：坐标/线宽在数据层即取整，面板显示值 = 最终绘制值。
 
 ## 环境要求
 
 - Unreal Engine **5.7**
-- 模块类型：Runtime，依赖 `UMG / Slate / SlateCore`
+- 模块：
+  - `USCADAWidget`（Runtime）：依赖 `UMG / Slate / SlateCore`
+  - `USCADAWidgetEditor`（Editor）：依赖 `UMGEditor / UnrealEd`，向 UMG 设计器注册顶点拖动手柄扩展，不参与打包
 
 ## 安装
 
@@ -75,21 +91,24 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 1. 在 UMG 设计器中搜索 `SCADA Canvas` 放入画布，作为所有图元的容器。
 2. 向 Canvas 中添加 `SCADA Line` / `SCADA Polyline` / `SCADA Polygon` / `SCADA Ellipse` / `SCADA Circle` / `SCADA Rectangle` / `SCADA Text`。
 3. 直接拖动/拉伸图元（支持拖过对边翻转、方向键微调），或在属性面板编辑坐标、线宽、颜色、线型、填充、闪烁等属性。
+4. 选中折线/多边形/线段后，直接拖动画布上的顶点手柄微调形状；在细节面板数组里 `+`/Insert 增点会自动落在合理位置（延长线 / 边中点）。
 
 ## 目录结构
 
 ```
-Source/USCADAWidget/
-├── Public/
-│   ├── SCADATypes.h          # 公共枚举/结构（全部 UENUM/USTRUCT(BlueprintType)）
-│   ├── Slate/                # 底层 SWidget（Canvas / Line / Polygon / Ellipse / Rectangle）
-│   └── Widgets/              # UMG 层控件（Canvas / Line / Polyline / Polygon / Ellipse / Circle / Rectangle / Text / 槽）
-└── Private/                  # 对应实现
+Source/
+├── USCADAWidget/             # Runtime 模块
+│   ├── Public/
+│   │   ├── SCADATypes.h      # 公共枚举/结构（全部 UENUM/USTRUCT(BlueprintType)）
+│   │   ├── Slate/            # 底层 SWidget（Canvas / Line / Polygon / Ellipse / Rectangle）
+│   │   └── Widgets/          # UMG 层控件（Canvas / Line / Polyline / Polygon / Ellipse / Circle / Rectangle / Text / 槽）
+│   └── Private/              # 对应实现
+└── USCADAWidgetEditor/       # Editor 模块：设计器顶点拖动手柄扩展（FDesignerExtension）
 ```
 
 ## 后续规划
 
-元件库（泵/阀/管道）、属性绑定与动画、`USCADAWidgetEditor` 编辑器模块。
+元件库（泵/阀/管道）、属性绑定与动画、更多图元专属设计器交互。
 
 ## 许可证
 

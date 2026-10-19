@@ -55,7 +55,8 @@ public:
 	ESCADAFillPattern FillPattern = ESCADAFillPattern::Solid;
 
 	/** 闪烁：开启后每 1 秒在正常色与闪烁色之间切换（全局所有图元同步）。
-	 *  闪烁时边框和填充都切到 FlashColor；FlashColor 透明度设为 0 即为“时隐时现”。 */
+	 *  只切填充到 FlashColor，边框保持 BorderColor（WinCC 语义：黑边白圆红闪 = 黑边红闪）；
+	 *  FlashColor 透明度设为 0 即为“时隐时现”。FillPattern=透明时没有填充可闪（无可见闪烁）。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash")
 	bool bFlashEnabled = false;
 

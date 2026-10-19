@@ -28,19 +28,19 @@ class USCADAWIDGET_API USCADARectangleWidget : public UWidget
 
 public:
 	/** 左上角位置（画布设计坐标） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	FVector2D Position = FVector2D(0.0, 0.0);
 
 	/** 尺寸（宽/高，像素，≥1） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	FVector2D Size = FVector2D(100.0, 60.0);
 
 	/** 圆角宽度（角弧 X 半径，像素，0 = 直角，≤ min(宽,高)/2） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (ClampMin = "0.0", Delta = "1.0", LinearDeltaSensitivity = "1"))
 	float CornerRadiusX = 0.0f;
 
 	/** 圆角高度（角弧 Y 半径，像素，0 = 直角，≤ min(宽,高)/2） */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle", meta = (ClampMin = "0.0", Delta = "1.0", LinearDeltaSensitivity = "1"))
 	float CornerRadiusY = 0.0f;
 
 	/** 边框颜色 */
@@ -64,7 +64,8 @@ public:
 	ESCADAFillPattern FillPattern = ESCADAFillPattern::Solid;
 
 	/** 闪烁：开启后每 1 秒在正常色与闪烁色之间切换（全局所有图元同步）。
-	 *  闪烁时边框和填充都切到 FlashColor；FlashColor 透明度设为 0 即为“时隐时现”。 */
+	 *  只切填充到 FlashColor，边框保持 BorderColor（WinCC 语义：黑边白圆红闪 = 黑边红闪）；
+	 *  FlashColor 透明度设为 0 即为“时隐时现”。FillPattern=透明时没有填充可闪（无可见闪烁）。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash")
 	bool bFlashEnabled = false;
 

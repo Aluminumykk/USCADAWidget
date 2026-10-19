@@ -38,7 +38,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Canvas")
 	FLinearColor GridColor = FLinearColor(1.f, 1.f, 1.f, 0.08f);
 
-	/** 缩放系数（预留，影响网格密度） */
+	/** 缩放系数：以左上角为原点对画布全部子内容整体渲染缩放（含网格密度）。
+	 *  跨平台/分辨率适配只调这里，图元内部坐标不变；线宽已按缩放自动补偿。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Canvas", meta = (ClampMin = "0.1"))
 	float Zoom = 1.0f;
 

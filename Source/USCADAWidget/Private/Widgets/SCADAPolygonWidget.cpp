@@ -293,6 +293,9 @@ void USCADAPolygonWidget::CheckSlotSync()
 	if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
 	{
 		bPendingInitialPlacement = false;
+		// 消耗 ForceSyncFromSlotRect 置的一次性授权：若被认领先消耗不掉，
+		// 下一次后台重写会被误判成授权输入。
+		bSlotRemapAuthorized = false;
 		const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
 		TranslateGeometryBy(RawMin - GetGeometryMin());
 		SyncSlotFromPoints();
@@ -331,6 +334,12 @@ void USCADAPolygonWidget::CheckSlotSync()
 		bPrevRawNegX = false;
 		bPrevRawNegY = false;
 		SyncSlotFromPoints();
+#if WITH_EDITOR
+		if (GIsEditor && !HasAnyFlags(RF_Transient))
+		{
+			MarkPackageDirty();
+		}
+#endif
 		return;
 	}
 	bSlotRemapAuthorized = false;

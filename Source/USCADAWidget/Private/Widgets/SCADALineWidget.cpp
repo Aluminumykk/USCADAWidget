@@ -208,6 +208,8 @@ void USCADALineWidget::CheckSlotSync()
 		// 已跑过，钩子 1 错过），若只采纳基准会把落点收下、数据留在默认位置（松手跳回原点），
 		// 之后 Raw!=Cache 时下方钩子 2 再用陈旧数据原点平移 = 位置突变。
 		// 所以认领标记仍在时先平移数据到槽位置并正向对齐，再以对齐后的槽矩形为基准。
+		// 守卫限定设计器：UMG 设计器实例的 GetWorld() 返回编辑器世界（非空！），
+		// 用 !IsGameWorld() 放行编辑器/预览世界，只屏蔽 PIE/打包游戏。
 		if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
 		{
 			bPendingInitialPlacement = false;
@@ -273,6 +275,9 @@ void USCADALineWidget::CheckSlotSync()
 	if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
 	{
 		bPendingInitialPlacement = false;
+		// 消耗 ForceSyncFromSlotRect 置的一次性授权：若被认领先消耗不掉，
+		// 下一次后台重写会被误判成授权输入。
+		bSlotRemapAuthorized = false;
 		const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
 		TranslateGeometryBy(RawMin - GetGeometryMin());
 		SyncSlotFromPoints();
@@ -311,6 +316,12 @@ void USCADALineWidget::CheckSlotSync()
 		bPrevRawNegX = false;
 		bPrevRawNegY = false;
 		SyncSlotFromPoints();
+#if WITH_EDITOR
+		if (GIsEditor && !HasAnyFlags(RF_Transient))
+		{
+			MarkPackageDirty();
+		}
+#endif
 		return;
 	}
 	bSlotRemapAuthorized = false;

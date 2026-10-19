@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Slate/SSCADAPolygon.h"
-#include "SCADATypes.h"
+#include "SCADAWidgetTypes.h"
 
 /**
  * 底层 Slate 矩形控件（对应 WinCC 的“矩形”对象，支持圆角）。

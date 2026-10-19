@@ -69,6 +69,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - **顶点 / 端点直接拖动**：选中折线 / 多边形（每个顶点）或线段（两端点）后，画布上显示手柄直接拖动改坐标（撤销事务、双实例同步、取整）。由编辑器模块 `USCADAWidgetEditor` 的设计器扩展提供。
 - **细节面板数值拖动降速**：坐标属性拖动恒为 1 单位/鼠标像素（默认速度与数值大小成正比，坐标上百时过快）。
 - 闪烁：`bFlashEnabled` + `FlashColor`，全局统一 1 秒换相（墙钟驱动，所有图元天然同步），只切颜色；透明度 0 即隐藏。运行时同样生效。
+- **相位翻转分组**：`bFlashInverted`（默认关）开启后与全局定时器取色相反——正常相位显示闪烁色、闪烁相位显示正常色。两组图元同一时刻换相、显示色互反（一组亮时另一组灭），用于状态互闪。线/折线控件默认属于翻转组，其余图元默认正常组。
 - 像素对齐：坐标/线宽在数据层即取整，面板显示值 = 最终绘制值。
 
 ## 环境要求
@@ -99,7 +100,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 Source/
 ├── USCADAWidget/             # Runtime 模块
 │   ├── Public/
-│   │   ├── SCADATypes.h      # 公共枚举/结构（全部 UENUM/USTRUCT(BlueprintType)）
+│   │   ├── SCADAWidgetTypes.h # 公共枚举/结构（全部 UENUM/USTRUCT(BlueprintType)；原名 SCADATypes.h，为避免与同工程其它插件同名头文件冲突而改名）
 │   │   ├── Slate/            # 底层 SWidget（Canvas / Line / Polygon / Ellipse / Rectangle）
 │   │   └── Widgets/          # UMG 层控件（Canvas / Line / Polyline / Polygon / Ellipse / Circle / Rectangle / Text / 槽）
 │   └── Private/              # 对应实现

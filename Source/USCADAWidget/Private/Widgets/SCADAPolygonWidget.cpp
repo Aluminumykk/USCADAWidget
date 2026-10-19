@@ -76,6 +76,7 @@ void USCADAPolygonWidget::SynchronizeProperties()
 		MyPolygon->SetFillPattern(FillPattern);
 		MyPolygon->SetFlashEnabled(bFlashEnabled);
 		MyPolygon->SetFlashColor(FlashColor);
+		MyPolygon->SetFlashInverted(bFlashInverted);
 	}
 }
 
@@ -468,6 +469,15 @@ void USCADAPolygonWidget::SetFlashColor(FLinearColor InColor)
 	if (MyPolygon.IsValid())
 	{
 		MyPolygon->SetFlashColor(FlashColor);
+	}
+}
+
+void USCADAPolygonWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
+	if (MyPolygon.IsValid())
+	{
+		MyPolygon->SetFlashInverted(bFlashInverted);
 	}
 }
 

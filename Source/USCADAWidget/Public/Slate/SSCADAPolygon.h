@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Slate/SSCADALine.h"
-#include "SCADATypes.h"
+#include "SCADAWidgetTypes.h"
 
 /**
  * 底层 Slate 多边形控件：闭合折线（首尾相连）+ 填充（对应 WinCC 的“多边形”对象）。

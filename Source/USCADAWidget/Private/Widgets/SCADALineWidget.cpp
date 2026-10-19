@@ -77,6 +77,7 @@ void USCADALineWidget::SynchronizeProperties()
 		MyLine->SetLineCap(LineCap);
 		MyLine->SetFlashEnabled(bFlashEnabled);
 		MyLine->SetFlashColor(FlashColor);
+		MyLine->SetFlashInverted(bFlashInverted);
 	}
 }
 
@@ -584,6 +585,15 @@ void USCADALineWidget::SetFlashColor(FLinearColor InColor)
 	if (MyLine.IsValid())
 	{
 		MyLine->SetFlashColor(FlashColor);
+	}
+}
+
+void USCADALineWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
+	if (MyLine.IsValid())
+	{
+		MyLine->SetFlashInverted(bFlashInverted);
 	}
 }
 

@@ -76,6 +76,7 @@ void USCADAEllipseWidget::SynchronizeProperties()
 		MyEllipse->SetFillPattern(FillPattern);
 		MyEllipse->SetFlashEnabled(bFlashEnabled);
 		MyEllipse->SetFlashColor(FlashColor);
+		MyEllipse->SetFlashInverted(bFlashInverted);
 	}
 }
 
@@ -421,6 +422,15 @@ void USCADAEllipseWidget::SetFlashColor(FLinearColor InColor)
 	if (MyEllipse.IsValid())
 	{
 		MyEllipse->SetFlashColor(FlashColor);
+	}
+}
+
+void USCADAEllipseWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
+	if (MyEllipse.IsValid())
+	{
+		MyEllipse->SetFlashInverted(bFlashInverted);
 	}
 }
 

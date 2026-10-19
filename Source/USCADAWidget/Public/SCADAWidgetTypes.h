@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "SCADATypes.generated.h"
+#include "SCADAWidgetTypes.generated.h"
 
 /** 线条样式（与 WinCC 线型下拉框对应） */
 UENUM(BlueprintType)

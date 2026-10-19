@@ -41,6 +41,7 @@ void SSCADALine::Construct(const FArguments& InArgs)
 	LineCap = InArgs._LineCap;
 	bFlashEnabled = InArgs._bFlashEnabled;
 	FlashColor = InArgs._FlashColor;
+	bFlashInverted = InArgs._bFlashInverted;
 	DashLength = InArgs._DashLength.Get();
 	GapLength = InArgs._GapLength.Get();
 	ArrowSize = InArgs._ArrowSize.Get();
@@ -84,6 +85,7 @@ void SSCADALine::SetLineEndStyle(const TAttribute<ESCADALineEndStyle>& InStyle) 
 void SSCADALine::SetLineCap(const TAttribute<ESCADALineCap>& InCap) { LineCap = InCap; }
 void SSCADALine::SetFlashEnabled(const TAttribute<bool>& bInEnabled) { bFlashEnabled = bInEnabled; }
 void SSCADALine::SetFlashColor(const TAttribute<FLinearColor>& InColor) { FlashColor = InColor; }
+void SSCADALine::SetFlashInverted(const TAttribute<bool>& bInInverted) { bFlashInverted = bInInverted; }
 
 int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
 	FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
@@ -117,8 +119,10 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 	const bool bEnabled = ShouldBeEnabled(bParentEnabled);
 	const ESlateDrawEffect DrawEffects = bEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
 
-	// 闪烁：相位为“闪烁色”时整条线（含箭头、线端）换色；FlashColor 透明度 0 即隐藏
-	const FLinearColor BaseColor = (bFlashEnabled.Get() && !IsFlashPhaseNormal()) ? FlashColor.Get() : Color.Get();
+	// 闪烁：相位为“闪烁色”时整条线（含箭头、线端）换色；FlashColor 透明度 0 即隐藏。
+	// 翻转组（bFlashInverted）与正常组取色相反：正常相位显示闪烁色、闪烁相位显示正常色。
+	const bool bShowFlash = bFlashEnabled.Get() && (IsFlashPhaseNormal() == bFlashInverted.Get());
+	const FLinearColor BaseColor = bShowFlash ? FlashColor.Get() : Color.Get();
 	const FLinearColor FinalColor = BaseColor * InWidgetStyle.GetColorAndOpacityTint();
 	const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
 	const float LineThickness = Thickness.Get();

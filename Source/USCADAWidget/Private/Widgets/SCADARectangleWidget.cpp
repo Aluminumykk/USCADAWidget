@@ -76,6 +76,7 @@ void USCADARectangleWidget::SynchronizeProperties()
 		MyRectangle->SetFillPattern(FillPattern);
 		MyRectangle->SetFlashEnabled(bFlashEnabled);
 		MyRectangle->SetFlashColor(FlashColor);
+		MyRectangle->SetFlashInverted(bFlashInverted);
 	}
 }
 
@@ -429,6 +430,15 @@ void USCADARectangleWidget::SetFlashColor(FLinearColor InColor)
 	if (MyRectangle.IsValid())
 	{
 		MyRectangle->SetFlashColor(FlashColor);
+	}
+}
+
+void USCADARectangleWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
+	if (MyRectangle.IsValid())
+	{
+		MyRectangle->SetFlashInverted(bFlashInverted);
 	}
 }
 

@@ -197,9 +197,10 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 
 	// 闪烁：相位为“闪烁色”时**只切填充色**到 FlashColor，边框保持本色（WinCC 语义：
 	// 黑边白圆红闪 = 黑边红闪）；全局 1 秒换相，与线同一逻辑。FlashColor 透明度 0 即填充隐藏。
-	const bool bPhaseNormal = IsFlashPhaseNormal();
+	// 翻转组（bFlashInverted）与正常组取色相反：正常相位显示闪烁色、闪烁相位显示正常色。
+	const bool bShowFlash = bFlashEnabled.Get() && (IsFlashPhaseNormal() == bFlashInverted.Get());
 	const FLinearColor BorderFinalColor = Color.Get() * InWidgetStyle.GetColorAndOpacityTint();
-	const FLinearColor FillFinalColor = ((bFlashEnabled.Get() && !bPhaseNormal) ? FlashColor.Get() : FillColor.Get()) * InWidgetStyle.GetColorAndOpacityTint();
+	const FLinearColor FillFinalColor = (bShowFlash ? FlashColor.Get() : FillColor.Get()) * InWidgetStyle.GetColorAndOpacityTint();
 
 	const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
 	const float LineThickness = Thickness.Get();

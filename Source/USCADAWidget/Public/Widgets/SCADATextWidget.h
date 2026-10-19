@@ -27,11 +27,20 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash", meta = (EditCondition = "bFlashEnabled"))
 	FLinearColor FlashColor = FLinearColor::Red;
 
+	/** 相位翻转（翻转组）：开启后与全局定时器取色相反——正常相位显示闪烁色、
+	 *  闪烁相位显示正常色。两组图元由同一时刻换相、显示色互反（一组亮时另一组灭），
+	 *  用于状态互闪。本控件默认属于正常组。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash", meta = (EditCondition = "bFlashEnabled"))
+	bool bFlashInverted = false;
+
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Flash")
 	void SetFlashEnabled(bool bInEnabled);
 
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Flash")
 	void SetFlashColor(FLinearColor InColor);
+
+	UFUNCTION(BlueprintCallable, Category = "SCADA|Flash")
+	void SetFlashInverted(bool bInInverted);
 
 	virtual void BeginDestroy() override;
 

@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Widgets/SLeafWidget.h"
-#include "SCADATypes.h"
+#include "SCADAWidgetTypes.h"
 
 /**
  * 底层 Slate 画线控件：绘制直线/折线（支持虚线、点线、端点箭头）。
@@ -23,6 +23,7 @@ public:
 		, _LineCap(ESCADALineCap::None)
 		, _bFlashEnabled(false)
 		, _FlashColor(FLinearColor::Red)
+		, _bFlashInverted(false)
 		, _DashLength(12.0f)
 		, _GapLength(6.0f)
 		, _ArrowSize(10.0f)
@@ -37,6 +38,7 @@ public:
 		SLATE_ATTRIBUTE(ESCADALineCap, LineCap)
 		SLATE_ATTRIBUTE(bool, bFlashEnabled)
 		SLATE_ATTRIBUTE(FLinearColor, FlashColor)
+		SLATE_ATTRIBUTE(bool, bFlashInverted)
 		SLATE_ATTRIBUTE(float, DashLength)
 		SLATE_ATTRIBUTE(float, GapLength)
 		SLATE_ATTRIBUTE(float, ArrowSize)
@@ -53,6 +55,7 @@ public:
 	void SetLineCap(const TAttribute<ESCADALineCap>& InCap);
 	void SetFlashEnabled(const TAttribute<bool>& bInEnabled);
 	void SetFlashColor(const TAttribute<FLinearColor>& InColor);
+	void SetFlashInverted(const TAttribute<bool>& bInInverted);
 
 	/** 每帧回调（供 UMG 层轮询槽矩形变化等）。Slate 层不直接依赖 UMG。 */
 	TFunction<void()> ExternalTickCallback;
@@ -62,7 +65,8 @@ public:
 	virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override;
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
-	/** 全局统一闪烁相位（所有图元同步，1 秒换相）。true = 显示正常色，false = 显示闪烁色 */
+	/** 全局统一闪烁相位（所有图元同步，1 秒换相）。true = 正常组显示正常色，false = 正常组显示闪烁色。
+	 *  翻转组图元（bFlashInverted=true）取色与此相反，由同一时刻换相。 */
 	static bool IsFlashPhaseNormal();
 
 protected:
@@ -91,6 +95,8 @@ protected:
 	TAttribute<ESCADALineCap> LineCap;
 	TAttribute<bool> bFlashEnabled;
 	TAttribute<FLinearColor> FlashColor;
+	/** 相位翻转（翻转组）：true = 与全局定时器取色相反（正常相位显示闪烁色、闪烁相位显示正常色） */
+	TAttribute<bool> bFlashInverted;
 	bool bLastFlashPhaseNormal = true;
 	float DashLength = 12.0f;
 	float GapLength = 6.0f;

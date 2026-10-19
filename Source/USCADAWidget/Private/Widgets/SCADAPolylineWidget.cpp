@@ -77,6 +77,7 @@ void USCADAPolylineWidget::SynchronizeProperties()
 		MyPolyline->SetLineCap(LineCap);
 		MyPolyline->SetFlashEnabled(bFlashEnabled);
 		MyPolyline->SetFlashColor(FlashColor);
+		MyPolyline->SetFlashInverted(bFlashInverted);
 	}
 }
 
@@ -479,6 +480,15 @@ void USCADAPolylineWidget::SetFlashColor(FLinearColor InColor)
 	if (MyPolyline.IsValid())
 	{
 		MyPolyline->SetFlashColor(FlashColor);
+	}
+}
+
+void USCADAPolylineWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
+	if (MyPolyline.IsValid())
+	{
+		MyPolyline->SetFlashInverted(bFlashInverted);
 	}
 }
 

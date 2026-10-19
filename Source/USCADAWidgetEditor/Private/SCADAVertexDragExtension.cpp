@@ -241,7 +241,7 @@ FSlateColor FSCADAVertexDragExtension::GetHandleColor(int32 Index) const
 FReply FSCADAVertexDragExtension::HandleBeginDrag(const FGeometry& Geometry, const FPointerEvent& Event, int32 Index)
 {
 	UWidget* Template = GetTemplateWidget();
-	FVector2D Vertex;
+	FVector2D Vertex = FVector2D::ZeroVector;
 	if (Event.GetEffectingButton() == EKeys::LeftMouseButton &&
 		Template != nullptr && GetVertex(Index, Vertex) &&
 		HandleWidgets.IsValidIndex(Index) && HandleWidgets[Index].IsValid())

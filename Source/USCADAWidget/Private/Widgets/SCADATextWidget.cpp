@@ -50,9 +50,11 @@ void USCADATextWidget::TickFlash()
 		return;
 	}
 
-	// 全局统一定时器：所有闪烁图元使用同一个墙钟相位，1 秒换相，天然同步
+	// 全局统一定时器：所有闪烁图元使用同一个墙钟相位，1 秒换相，天然同步。
+	// 翻转组（bFlashInverted）与正常组取色相反：正常相位显示闪烁色、闪烁相位显示正常色。
 	const bool bPhaseNormal = (FMath::FloorToInt64(FPlatformTime::Seconds()) % 2) == 0;
-	const FLinearColor EffectiveColor = (bFlashEnabled && !bPhaseNormal) ? FlashColor : ColorAndOpacity.GetSpecifiedColor();
+	const bool bShowFlash = bFlashEnabled && (bPhaseNormal == bFlashInverted);
+	const FLinearColor EffectiveColor = bShowFlash ? FlashColor : ColorAndOpacity.GetSpecifiedColor();
 	if (!bHasAppliedColor || EffectiveColor != LastAppliedColor)
 	{
 		LastAppliedColor = EffectiveColor;
@@ -69,6 +71,11 @@ void USCADATextWidget::SetFlashEnabled(bool bInEnabled)
 void USCADATextWidget::SetFlashColor(FLinearColor InColor)
 {
 	FlashColor = InColor;
+}
+
+void USCADATextWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
 }
 
 #if WITH_EDITOR

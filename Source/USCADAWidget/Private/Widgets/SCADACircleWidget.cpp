@@ -76,6 +76,7 @@ void USCADACircleWidget::SynchronizeProperties()
 		MyCircle->SetFillPattern(FillPattern);
 		MyCircle->SetFlashEnabled(bFlashEnabled);
 		MyCircle->SetFlashColor(FlashColor);
+		MyCircle->SetFlashInverted(bFlashInverted);
 	}
 }
 
@@ -561,6 +562,15 @@ void USCADACircleWidget::SetFlashColor(FLinearColor InColor)
 	if (MyCircle.IsValid())
 	{
 		MyCircle->SetFlashColor(FlashColor);
+	}
+}
+
+void USCADACircleWidget::SetFlashInverted(bool bInInverted)
+{
+	bFlashInverted = bInInverted;
+	if (MyCircle.IsValid())
+	{
+		MyCircle->SetFlashInverted(bFlashInverted);
 	}
 }
 

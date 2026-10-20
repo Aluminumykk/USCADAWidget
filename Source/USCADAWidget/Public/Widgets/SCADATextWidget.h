@@ -52,8 +52,10 @@ protected:
 #endif
 
 private:
-	/** 闪烁驱动：UTextBlock 无 Tick，用核心 Ticker 每帧检查全局相位（惰性注册，BeginDestroy 注销） */
+	/** 闪烁驱动：UTextBlock 无 Tick，用核心 Ticker 每帧检查全局相位。
+	 *  按需注册：仅 bFlashEnabled 为 true 时注册，关闭即注销（BeginDestroy 注销作兜底）。 */
 	void EnsureFlashTicker();
+	void RemoveFlashTicker();
 	void TickFlash();
 
 	FTSTicker::FDelegateHandle FlashTickerHandle;

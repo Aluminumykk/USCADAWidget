@@ -2,10 +2,10 @@
 
 #pragma once
 
+#include "SCADAWidgetTypes.h"
 #include "CoreMinimal.h"
 #include "Components/Widget.h"
 #include "Containers/Ticker.h"
-#include "SCADAWidgetTypes.h"
 #include "SCADAPolylineWidget.generated.h"
 
 class SSCADALine;

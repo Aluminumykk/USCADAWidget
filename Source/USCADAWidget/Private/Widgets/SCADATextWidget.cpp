@@ -8,11 +8,7 @@
 
 void USCADATextWidget::BeginDestroy()
 {
-	if (FlashTickerHandle.IsValid())
-	{
-		FTSTicker::GetCoreTicker().RemoveTicker(FlashTickerHandle);
-		FlashTickerHandle.Reset();
-	}
+	RemoveFlashTicker();
 	Super::BeginDestroy();
 }
 
@@ -20,7 +16,16 @@ void USCADATextWidget::SynchronizeProperties()
 {
 	Super::SynchronizeProperties();
 
-	EnsureFlashTicker();
+	// 闪烁按需注册：仅开启闪烁的文本才占用每帧 Ticker；关闭时若已注册则注销。
+	// 关闭分支无需立即修色：Super 刚把本色推给了 Slate。
+	if (bFlashEnabled)
+	{
+		EnsureFlashTicker();
+	}
+	else
+	{
+		RemoveFlashTicker();
+	}
 	// 属性被重建/编辑后强制下一帧重推颜色（Super 刚把本色推给了 Slate）
 	bHasAppliedColor = false;
 }
@@ -43,6 +48,15 @@ void USCADATextWidget::EnsureFlashTicker()
 	}));
 }
 
+void USCADATextWidget::RemoveFlashTicker()
+{
+	if (FlashTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(FlashTickerHandle);
+		FlashTickerHandle.Reset();
+	}
+}
+
 void USCADATextWidget::TickFlash()
 {
 	if (!MyTextBlock.IsValid())
@@ -54,7 +68,7 @@ void USCADATextWidget::TickFlash()
 	// 翻转组（bFlashInverted）与正常组取色相反：正常相位显示闪烁色、闪烁相位显示正常色。
 	const bool bPhaseNormal = (FMath::FloorToInt64(FPlatformTime::Seconds()) % 2) == 0;
 	const bool bShowFlash = bFlashEnabled && (bPhaseNormal == bFlashInverted);
-	const FLinearColor EffectiveColor = bShowFlash ? FlashColor : ColorAndOpacity.GetSpecifiedColor();
+	const FLinearColor EffectiveColor = bShowFlash ? FlashColor : GetColorAndOpacity().GetSpecifiedColor();
 	if (!bHasAppliedColor || EffectiveColor != LastAppliedColor)
 	{
 		LastAppliedColor = EffectiveColor;
@@ -66,6 +80,16 @@ void USCADATextWidget::TickFlash()
 void USCADATextWidget::SetFlashEnabled(bool bInEnabled)
 {
 	bFlashEnabled = bInEnabled;
+	if (bFlashEnabled)
+	{
+		EnsureFlashTicker();
+	}
+	else
+	{
+		RemoveFlashTicker();
+		// 关闭时立即恢复本色（否则文字会停在闪烁色上，直到下次属性同步）
+		TickFlash();
+	}
 }
 
 void USCADATextWidget::SetFlashColor(FLinearColor InColor)

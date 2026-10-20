@@ -211,7 +211,9 @@ void USCADARectangleWidget::CheckSlotSync()
 		return;
 	}
 
-	const bool bLeftMouseDown = FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton);
+	// 鼠标按键查询惰性化：稳态空转帧（槽矩形无变化，占绝大多数帧）不做这次哈希查找，
+	// 仅在收尾判定/授权门闸实际需要时才取值。
+	const auto IsLeftMouseDown = []() { return FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton); };
 
 	if (RawPos.Equals(CachedSlotPos) && RawSize.Equals(CachedSlotSize))
 	{
@@ -220,7 +222,7 @@ void USCADARectangleWidget::CheckSlotSync()
 
 		// 设计器无新输入。鼠标左键仍按下 = 拖动中停顿，不收尾（保留符号沿状态）；
 		// 已松开 = 交互结束，收尾一次：取整、标脏、符号基线复位。
-		if (bPendingFinalize && !bLeftMouseDown)
+		if (bPendingFinalize && !IsLeftMouseDown())
 		{
 			bPendingFinalize = false;
 			bInteractionModified = false;
@@ -286,7 +288,7 @@ void USCADARectangleWidget::CheckSlotSync()
 	// 映射会把刚恢复的数据再改写一遍（撤销当下走样）。一律拒绝映射、以数据为真值对齐槽。
 	// 合法通道：设计器拖动（鼠标按下）、面板编辑/方向键微调/拖放落点（经
 	// NotifyContentSlotGeometryChanged → ForceSyncFromSlotRect 置一次性授权）。
-	if (!bLeftMouseDown && !bSlotRemapAuthorized)
+	if (!IsLeftMouseDown() && !bSlotRemapAuthorized)
 	{
 		bPendingFinalize = false;
 		bInteractionModified = false;

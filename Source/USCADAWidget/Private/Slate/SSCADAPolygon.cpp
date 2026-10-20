@@ -190,9 +190,14 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 
 					// 环带外缘抗锯齿覆层：沿外轮廓（原始轮廓）覆一条 3 屏幕像素宽的同色
 					//（边框色）闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），
-					// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边（内缘与填充相接处是
-					// 不透明交界，无需处理）。
+					// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边。
 					DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, BorderFinalColor, DrawEffects);
+
+					// 环带内缘抗锯齿覆层（边框色，沿内缩轮廓）：内缘是边框与填充的交界，
+					// 此前是唯一未处理的硬曲线——直边多边形上不可见，但椭圆/圆角矩形的
+					// 弧形内缘会沿曲线显出锯齿；补齐后与 SDF 边框（内缘本有解析 AA）语义
+					// 对齐，直线图元同样受益（交界 1px 渐变属正常渲染器行为）。
+					DrawContourAA(OutDrawElements, LayerId, PaintGeom, InnerRing, BorderFinalColor, DrawEffects);
 				}
 			}
 			else

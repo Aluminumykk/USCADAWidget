@@ -24,7 +24,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 ### SCADA Polyline（折线）
 
 - `Points` 数组按顺序连接，复用 Line 的全部样式属性（线型 / 箭头 / 圆顶）。
-- 拐点圆连接（Round Join）：实线 = 原始折线 + 每个中间顶点直径 = 线宽的实心连接盘，任意角度连续无接缝；虚线沿圆弧流动划线模式。
+- 拐角圆滑过渡：实线线体采用**笔画包络**绘制（中心线两侧偏移构造封闭轮廓，一次填色并柔化边缘），拐角自动以短圆弧过渡（默认半径 10px，随邻段长度自适应收缩，drawio 式肘部观感），任意角度连续无接缝，放大后同样平滑；虚线沿圆弧流动划线模式。
 - **每个折点可在设计器中直接拖动手柄**编辑（编辑器模块 USCADAWidgetEditor）。
 - **数组增点自动定位**：`+` 追加 = 终点增、元素右键 Insert 到 0 = 起点增，新点沿就近线段延长 100px（不再落在原点）；中间插入取两邻点中点。
 
@@ -54,7 +54,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 
 - **内画语义**：几何数据（顶点 / 半径 / 尺寸）= 外轮廓 = 视觉边界 = 槽包围盒；边框整体画在图形内部，外轮廓不随边宽变化。
 - **Thickness 允许 0** = 不画边框，且图形本体一点不小（不会"少一圈"）。
-- 实线边框 = 环带四边形条带：外环 = 原始轮廓（尖角精确到几何顶点）、内环 = 内缩 T 的轮廓，逐边两个三角形零缝隙——尖角不外露填充；填充与边框分层绘制，边框稳定压在填充之上。
+- 实线边框 = 环带四边形条带：外环 = 原始轮廓（尖角精确到几何顶点）、内环 = 内缩 T 的轮廓，逐边两个三角形零缝隙——尖角不外露填充；填充与边框分层绘制，边框稳定压在填充之上。**正圆与矩形（直角 / 等半径圆角）的实线样式走引擎解析圆角矩形（RoundedBox SDF）快速路径**：填充 + 内画边框单元素完成，数学精确曲线与解析抗锯齿；其余情形（虚线样式、不等半径椭圆角等）自动回退上述环带路径，语义与观感完全一致。
 - **闪烁只切填充色**，边框保持本色（WinCC 语义：黑边白圆红闪 = 黑边红闪）。
 
 ### SCADA Text（文字）
@@ -71,13 +71,14 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - 闪烁：`bFlashEnabled` + `FlashColor`，全局统一 1 秒换相（墙钟驱动，所有图元天然同步），只切颜色；透明度 0 即隐藏。运行时同样生效。
 - **相位翻转分组**：`bFlashInverted`（默认关）开启后与全局定时器取色相反——正常相位显示闪烁色、闪烁相位显示正常色。两组图元同一时刻换相、显示色互反（一组亮时另一组灭），用于状态互闪。线/折线控件默认属于翻转组，其余图元默认正常组。
 - 像素对齐：坐标/线宽在数据层即取整，面板显示值 = 最终绘制值。
+- **渲染平滑度（所有可见边缘均有抗锯齿）**：正圆与等半径圆角矩形走 RoundedBox SDF——解析曲线 + 解析抗锯齿，随画布 Zoom 任意缩放同样锐滑；Line / Polyline 实线为笔画包络填色，边缘柔化、拐角自动圆弧过渡；其余曲线图元（椭圆、不等半径圆角、多边形）的填充与边框内外缘均有同色柔边处理。与像素对齐不冲突：数据层整数化决定"画在哪"，渲染层抗锯齿决定"边缘多柔"。
 
 ## 环境要求
 
 - Unreal Engine **5.7**
 - 模块：
-  - `USCADAWidget`（Runtime）：依赖 `UMG / Slate / SlateCore`
-  - `USCADAWidgetEditor`（Editor）：依赖 `UMGEditor / UnrealEd`，向 UMG 设计器注册顶点拖动手柄扩展，不参与打包
+  - `USCADAWidget`（Runtime）：依赖 `Core / CoreUObject / Engine / UMG`（Public），`Slate / SlateCore / InputCore`（Private）
+  - `USCADAWidgetEditor`（Editor）：依赖 `UMGEditor / UnrealEd` 等编辑器模块，向 UMG 设计器注册顶点拖动手柄扩展，不参与打包
 
 ## 安装
 
@@ -101,7 +102,7 @@ Source/
 ├── USCADAWidget/             # Runtime 模块
 │   ├── Public/
 │   │   ├── SCADAWidgetTypes.h # 公共枚举/结构（全部 UENUM/USTRUCT(BlueprintType)；原名 SCADATypes.h，为避免与同工程其它插件同名头文件冲突而改名）
-│   │   ├── Slate/            # 底层 SWidget（Canvas / Line / Polygon / Ellipse / Rectangle）
+│   │   ├── Slate/            # 底层 SWidget（Canvas / Line / Polygon / Ellipse / Rectangle）+ 共享笔画几何工具 SCADAStrokeGeometry.h（笔画包络构造、耳切三角化，Line/Polygon 共用）
 │   │   └── Widgets/          # UMG 层控件（Canvas / Line / Polyline / Polygon / Ellipse / Circle / Rectangle / Text / 槽）
 │   └── Private/              # 对应实现
 └── USCADAWidgetEditor/       # Editor 模块：设计器顶点拖动手柄扩展（FDesignerExtension）

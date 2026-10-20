@@ -36,6 +36,10 @@ public:
 	 *  圆控件在设计器拖动中槽不是正方形，圆心不一定在槽内 (R,R) 处，由控件层换算后传入。 */
 	void SetLocalCenter(FVector2D InCenter);
 
+	/** 批量几何推送：一次设置两轴半径 + 显式本地中心，只重采样一次
+	 *  （等价于 SetRadiusX + SetRadiusY + SetLocalCenter 连调，消除 UMG 层成串推送的重复采样） */
+	void SetGeometry(float InRadiusX, float InRadiusY, FVector2D InLocalCenter);
+
 protected:
 	/** RadiusX=RadiusY（正圆）时报告解析几何：SDF 精确整圆（数据层半径为整数，两半径恒同步，
 	 *  圆控件走这条路径；椭圆控件非等轴时自动回退采样管线）。 */

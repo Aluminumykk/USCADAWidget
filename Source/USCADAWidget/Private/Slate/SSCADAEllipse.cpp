@@ -42,6 +42,19 @@ void SSCADAEllipse::SetLocalCenter(FVector2D InCenter)
 	ResamplePerimeter();
 }
 
+void SSCADAEllipse::SetGeometry(float InRadiusX, float InRadiusY, FVector2D InLocalCenter)
+{
+	// 等价于 SetRadiusX + SetRadiusY + SetLocalCenter 连调后的终态：
+	// 半径各自钳下限 ≥1；终态 bCenterExplicit 恒为 true（LocalCenter 显式传入），
+	// 故单 Setter 里 !bCenterExplicit 的中心跟随分支对终态无贡献，无需复现；
+	// 中间各次 ResamplePerimeter 写入的 Points 无人读取（下一个 Setter 立即覆盖），合并为一次。
+	RadiusX = FMath::Max(InRadiusX, 1.0f);
+	RadiusY = FMath::Max(InRadiusY, 1.0f);
+	bCenterExplicit = true;
+	LocalCenter = InLocalCenter;
+	ResamplePerimeter();
+}
+
 bool SSCADAEllipse::TryGetAnalyticBox(FAnalyticBox& OutBox) const
 {
 	// 仅正圆走 SDF（半径数据层已取整，两半径来自同一整型值时严格相等，容差只兜历史浮点）；

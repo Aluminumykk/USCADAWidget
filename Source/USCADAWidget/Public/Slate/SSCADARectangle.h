@@ -42,6 +42,10 @@ public:
 	/** 圆角高度（角弧 Y 半径，像素，0 = 直角，≤ min(宽,高)/2） */
 	void SetCornerRadiusY(float InRadiusY);
 
+	/** 批量几何推送：一次设置宽/高/两轴圆角半径，只重采样一次
+	 *  （等价于 SetWidth + SetHeight + SetCornerRadiusX + SetCornerRadiusY 连调，消除 UMG 层成串推送的重复采样） */
+	void SetGeometry(float InWidth, float InHeight, float InCornerRX, float InCornerRY);
+
 protected:
 	/** 直角（两轴圆角任一为 0）或等半径圆角（RX=RY）时报告解析几何：SDF 直角/等半径圆角矩形
 	 *  （两轴椭圆角 SDF 每角单标量表示不了，自动回退采样管线）。 */

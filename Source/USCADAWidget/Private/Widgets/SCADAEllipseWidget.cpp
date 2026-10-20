@@ -91,8 +91,9 @@ void USCADAEllipseWidget::PushGeometryToSlate()
 {
 	if (MyEllipse.IsValid())
 	{
-		MyEllipse->SetRadiusX(RadiusX);
-		MyEllipse->SetRadiusY(RadiusY);
+		// 椭圆的槽矩形恒等于包围盒，本地中心恒为 (RadiusX, RadiusY)（即原单 Setter 链
+		// !bCenterExplicit 中心跟随分支的终态值），批量接口一次写入、只重采样一次
+		MyEllipse->SetGeometry(RadiusX, RadiusY, FVector2D(RadiusX, RadiusY));
 	}
 }
 

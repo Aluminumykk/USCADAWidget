@@ -91,10 +91,8 @@ void USCADARectangleWidget::PushGeometryToSlate()
 {
 	if (MyRectangle.IsValid())
 	{
-		MyRectangle->SetWidth((float)Size.X);
-		MyRectangle->SetHeight((float)Size.Y);
-		MyRectangle->SetCornerRadiusX(CornerRadiusX);
-		MyRectangle->SetCornerRadiusY(CornerRadiusY);
+		// 批量推送：宽/高/圆角一次写入，Slate 层只重采样一次
+		MyRectangle->SetGeometry((float)Size.X, (float)Size.Y, CornerRadiusX, CornerRadiusY);
 	}
 }
 

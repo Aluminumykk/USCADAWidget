@@ -38,6 +38,19 @@ void SSCADARectangle::SetCornerRadiusY(float InRadiusY)
 	ResamplePerimeter();
 }
 
+void SSCADARectangle::SetGeometry(float InWidth, float InHeight, float InCornerRX, float InCornerRY)
+{
+	// 等价于 SetWidth + SetHeight + SetCornerRadiusX + SetCornerRadiusY 连调后的终态：
+	// 宽/高各自钳下限 ≥1、圆角各自钳下限 ≥0，四者互不依赖、无中间状态被依赖；
+	// 圆角 ≤ min(宽,高)/2 的上限钳位在 ResamplePerimeter 内按最终尺寸统一进行，语义不变；
+	// 中间各次 ResamplePerimeter 写入的 Points 无人读取（下一个 Setter 立即覆盖），合并为一次。
+	Width = FMath::Max(InWidth, 1.0f);
+	Height = FMath::Max(InHeight, 1.0f);
+	CornerRadiusX = FMath::Max(InCornerRX, 0.0f);
+	CornerRadiusY = FMath::Max(InCornerRY, 0.0f);
+	ResamplePerimeter();
+}
+
 bool SSCADARectangle::TryGetAnalyticBox(FAnalyticBox& OutBox) const
 {
 	// 与 ResamplePerimeter 相同的钳位规则求有效圆角

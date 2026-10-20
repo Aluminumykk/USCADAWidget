@@ -91,8 +91,6 @@ void USCADACircleWidget::PushGeometryToSlate()
 {
 	if (MyCircle.IsValid())
 	{
-		MyCircle->SetRadiusX(Radius);
-		MyCircle->SetRadiusY(Radius);
 		// 设计器拖动中槽不是正方形，圆心不一定在槽内 (R,R) 处：
 		// 把画布坐标圆心换算成槽内局部坐标显式传入，绘制位置与数据严格一致（松手槽回正时无跳变）
 		FVector2D SlotPos = FVector2D::ZeroVector;
@@ -100,7 +98,8 @@ void USCADACircleWidget::PushGeometryToSlate()
 		{
 			SlotPos = CanvasSlot->GetPosition();
 		}
-		MyCircle->SetLocalCenter(Center - SlotPos);
+		// 批量推送：半径 + 显式本地中心一次写入，Slate 层只重采样一次
+		MyCircle->SetGeometry(Radius, Radius, Center - SlotPos);
 	}
 }
 

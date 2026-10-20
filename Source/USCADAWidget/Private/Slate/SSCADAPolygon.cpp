@@ -2,6 +2,7 @@
 
 #include "Slate/SSCADAPolygon.h"
 
+#include "Slate/SCADAStrokeGeometry.h"
 #include "Styling/SlateBrush.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Rendering/DrawElements.h"
@@ -29,130 +30,7 @@ static const FSlateResourceHandle& GetWhiteFillHandle()
 	return Handle;
 }
 
-/**
- * 耳切三角化（Ear Clipping）：把可能凹的简单多边形（顶点按序，顺时针或逆时针均可）
- * 拆成三角形组（每个三角形 3 个原始顶点索引）。
- * 失败（完全共线/自交/病态退化）返回 false，调用方静默跳过，只画边框。
- * O(n^3)，SCADA 多边形点数量级下足够。
- */
-static bool TriangulatePolygonEarClipping(const TArray<FVector2D>& Vertices, TArray<int32>& OutTriangles)
-{
-	OutTriangles.Reset();
-	const int32 n = Vertices.Num();
-	if (n < 3)
-	{
-		return false;
-	}
-
-	// 去掉相邻重复点（含闭合列表首尾重复），避免退化三角形
-	TArray<int32> Live;
-	Live.Reserve(n);
-	for (int32 i = 0; i < n; ++i)
-	{
-		if (Live.Num() == 0 || !Vertices[i].Equals(Vertices[Live.Last()], 0.01f))
-		{
-			Live.Add(i);
-		}
-	}
-	if (Live.Num() > 1 && Vertices[Live[0]].Equals(Vertices[Live.Last()], 0.01f))
-	{
-		Live.RemoveAt(Live.Num() - 1);
-	}
-	const int32 m = Live.Num();
-	if (m < 3)
-	{
-		return false;
-	}
-
-	// 有向面积 → 环绕方向（Area>0 = 逆时针）
-	double Area = 0.0;
-	for (int32 i = 0; i < m; ++i)
-	{
-		const FVector2D& A = Vertices[Live[i]];
-		const FVector2D& B = Vertices[Live[(i + 1) % m]];
-		Area += (double)A.X * (double)B.Y - (double)B.X * (double)A.Y;
-	}
-	if (FMath::Abs(Area) < 1e-6)
-	{
-		return false; // 完全共线退化
-	}
-	const double Sign = (Area > 0.0) ? 1.0 : -1.0;
-
-	// 三点叉积（有向面积×2 的符号载体）
-	auto CrossOf = [&](int32 ia, int32 ib, int32 ic) -> double
-	{
-		const FVector2D& A = Vertices[ia];
-		const FVector2D& B = Vertices[ib];
-		const FVector2D& C = Vertices[ic];
-		return (double)(B.X - A.X) * (double)(C.Y - A.Y) - (double)(B.Y - A.Y) * (double)(C.X - A.X);
-	};
-
-	// 点在三角形内（含落在边上 → 保守地判“不是耳朵”，避免把边上的顶点挖掉）
-	auto PointInTri = [&](int32 ip, int32 ia, int32 ib, int32 ic) -> bool
-	{
-		const FVector2D& P = Vertices[ip];
-		const FVector2D& A = Vertices[ia];
-		const FVector2D& B = Vertices[ib];
-		const FVector2D& C = Vertices[ic];
-		const double c1 = (double)(B.X - A.X) * (double)(P.Y - A.Y) - (double)(B.Y - A.Y) * (double)(P.X - A.X);
-		const double c2 = (double)(C.X - B.X) * (double)(P.Y - B.Y) - (double)(C.Y - B.Y) * (double)(P.X - B.X);
-		const double c3 = (double)(A.X - C.X) * (double)(P.Y - C.Y) - (double)(A.Y - C.Y) * (double)(P.X - C.X);
-		// 三条有向边相对多边形同向 → P 在内部或边上
-		return (c1 * Sign) >= 0.0 && (c2 * Sign) >= 0.0 && (c3 * Sign) >= 0.0;
-	};
-
-	// 迭代找耳朵：凸（叉积符号=多边形方向）且三角形内无其他顶点 → 输出并移除
-	TArray<int32> LiveIdx = Live;
-	while (LiveIdx.Num() > 3)
-	{
-		const int32 mNow = LiveIdx.Num();
-		bool bFoundEar = false;
-		for (int32 i = 0; i < mNow && !bFoundEar; ++i)
-		{
-			const int32 ia = LiveIdx[(i - 1 + mNow) % mNow];
-			const int32 ib = LiveIdx[i];
-			const int32 ic = LiveIdx[(i + 1) % mNow];
-
-			// 凸耳朵判定（共线 c==0 不算耳朵，等邻居变化后再试）
-			if (CrossOf(ia, ib, ic) * Sign <= 0.0)
-			{
-				continue;
-			}
-
-			bool bClear = true;
-			for (int32 j = 0; j < mNow && bClear; ++j)
-			{
-				if (j == i || j == (i - 1 + mNow) % mNow || j == (i + 1) % mNow)
-				{
-					continue;
-				}
-				if (PointInTri(LiveIdx[j], ia, ib, ic))
-				{
-					bClear = false;
-				}
-			}
-
-			if (bClear)
-			{
-				OutTriangles.Add(ia);
-				OutTriangles.Add(ib);
-				OutTriangles.Add(ic);
-				LiveIdx.RemoveAt(i);
-				bFoundEar = true;
-			}
-		}
-		if (!bFoundEar)
-		{
-			return false; // 无可用耳朵（自交/严重退化）——静默失败
-		}
-	}
-
-	// 剩余 3 个顶点构成最后一个三角形
-	OutTriangles.Add(LiveIdx[0]);
-	OutTriangles.Add(LiveIdx[1]);
-	OutTriangles.Add(LiveIdx[2]);
-	return true;
-}
+// 耳切三角化已移至共享头 Slate/SCADAStrokeGeometry.h（Line 笔画包络与此处填充共用一份实现）
 
 void SSCADAPolygon::Construct(const FArguments& InArgs)
 {
@@ -176,11 +54,15 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 		return LayerId;
 	}
 
+	// 平滑曲线轮廓（椭圆 / 两轴圆角矩形的角弧）：绘制层跳过整数取整，
+	// 避免密集采样曲线的每段 ~0.3px 阶梯抖动被 AA 覆层放大成可见波浪（数据真值不变）
+	bSmoothContourActive = PaintsSmoothContour();
+
 	TArray<FVector2D> Poly;
 	Poly.SetNumUninitialized(RawPoints.Num());
 	for (int32 i = 0; i < RawPoints.Num(); ++i)
 	{
-		Poly[i] = SnapToPixel(RawPoints[i]);
+		Poly[i] = bSmoothContourActive ? RawPoints[i] : SnapToPixel(RawPoints[i]);
 	}
 
 	// 闭合点列：原始点按序 + 首点回接
@@ -208,10 +90,56 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	const float RenderScale = (float)(AllottedGeometry.LocalToAbsolute(FVector2D(1.0, 0.0)) - AllottedGeometry.LocalToAbsolute(FVector2D::ZeroVector)).Size();
 	const float ScaledLineThickness = LineThickness * RenderScale;
 
+	// 0) 解析几何快速路径：正圆 / 直角或等半径圆角矩形 + 实线样式 → 一次 RoundedBox SDF
+	//    （解析距离场：零折线感 + 解析抗锯齿，同时天然维持“外轮廓=几何=槽包围盒、边框内画”
+	//    不变式）。圆角/边框宽度参数为局部单位，随渲染变换视觉等比，无需 RenderScale 补偿。
+	//    边框宽度会使内轮廓坍塌（T ≥ 小边一半）时不走此路径——与采样管线“内缩坍塌静默跳过
+	//    边框”的语义保持同侧（坍塌区间留给采样路径处理）。
+	FAnalyticBox ABox;
+	if (LineStyle.Get() == ESCADALineStyle::Solid && TryGetAnalyticBox(ABox)
+		&& LineThickness < FMath::Min(ABox.Size.X, ABox.Size.Y) * 0.5f)
+	{
+		const bool bDrawFill = (FillPattern.Get() == ESCADAFillPattern::Solid);
+		const bool bDrawBorder = (LineThickness > KINDA_SMALL_NUMBER);
+		if (bDrawFill || bDrawBorder)
+		{
+			// 填充色走 MakeBox 的 Tint（含闪烁/风格 tint），brush 本体恒白（成员初始化器设定）；
+			// 边框颜色/宽度/圆角是 SDF 的独立参数（OUTLINE_COLOR/OUTLINE_WEIGHT/CornerRadii），
+			// 只切填充不影响边框——与采样路径的 WinCC 闪烁语义一致。
+			AnalyticFillBrush.OutlineSettings.CornerRadii = FVector4(ABox.CornerRadius, ABox.CornerRadius, ABox.CornerRadius, ABox.CornerRadius);
+			AnalyticFillBrush.OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
+			AnalyticFillBrush.OutlineSettings.Width = bDrawBorder ? LineThickness : 0.0f;
+			AnalyticFillBrush.OutlineSettings.Color = BorderFinalColor;
+			const FGeometry BoxGeom = AllottedGeometry.MakeChild(
+				FVector2f(ABox.Size),
+				FSlateLayoutTransform(FVector2f(ABox.TopLeft)));
+			// NoPixelSnapping：Slate 默认对 Box 元素做设备像素顶点取整（IsPixelSnapped 默认
+			// true，DrawElementTypes.h:347）。轴对齐时无害，但旋转/斜放元素的四角被取整会让
+			// 长边平行摆动 ±0.5px（正是"直段发糙"的来源，DrawLine 路径无此取整故干净）。
+			// 关闭后 SDF 保留亚像素边 + 1 局部单位着色器 AA，任何缩放下都平滑。
+			FSlateDrawElement::MakeBox(OutDrawElements, LayerId, BoxGeom.ToPaintGeometry(), &AnalyticFillBrush,
+				DrawEffects | ESlateDrawEffect::NoPixelSnapping, bDrawFill ? FillFinalColor : FLinearColor(0.f, 0.f, 0.f, 0.f));
+		}
+		return LayerId + 1;
+	}
+
+	// 是否将按实线样式画内画边框（决定填充是否需要自带轮廓覆层：实线边框时其环带 +
+	// 边框色覆层完整覆盖填充轮廓；若再画填充色覆层会在边框外缘外出现一半个像素的杂色晕）
+	const bool bBorderSolidDrawn = (LineThickness > KINDA_SMALL_NUMBER) && (LineStyle.Get() == ESCADALineStyle::Solid);
+
 	// 1) 填充（实心）：耳切三角化 + 一次 MakeCustomVerts 实心三角扇；三角化失败静默跳过（仍画边框）
 	if (FillPattern.Get() == ESCADAFillPattern::Solid)
 	{
 		DrawPolygonFill(OutDrawElements, LayerId, AllottedGeometry, Closed, FillFinalColor, DrawEffects);
+
+		// 填充轮廓抗锯齿覆层（CustomVerts 无抗锯齿）：沿外轮廓覆一条 3 屏幕像素宽的
+		// 同色闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），把边缘外包络换成
+		// 渐变边。虚线边框场景下由本覆层负责划间空隙里的填充边缘（划本身是 AA 线且在
+		// 更高层，不受影响）。
+		if (!bBorderSolidDrawn)
+		{
+			DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, FillFinalColor, DrawEffects);
+		}
 	}
 
 	// 2) 闭合边框（**内画 + 显式更高绘制层**）：几何数据 = 外轮廓 = 视觉边界；
@@ -259,6 +187,12 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 						BandIndices.Add(N + i);
 					}
 					DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, BandVerts, BandIndices, BorderFinalColor, DrawEffects);
+
+					// 环带外缘抗锯齿覆层：沿外轮廓（原始轮廓）覆一条 3 屏幕像素宽的同色
+					//（边框色）闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），
+					// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边（内缘与填充相接处是
+					// 不透明交界，无需处理）。
+					DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, BorderFinalColor, DrawEffects);
 				}
 			}
 			else
@@ -320,13 +254,24 @@ void SSCADAPolygon::DrawTriangleList(FSlateWindowElementList& OutDrawElements, i
 {
 	// 一次 MakeCustomVerts 实心三角扇：白色资源句柄回退（与 SSCADALine::AppendArrow 同一条路径），
 	// 顶点位置在“绘制空间”（累积渲染变换后做像素对齐，与线体顶点同一规则），纯色由顶点 tint 决定。
+	// 平滑曲线轮廓（bSmoothContourActive，见 PaintsSmoothContour）跳过顶点取整，保留亚像素几何。
 	const FSlateRenderTransform& RT = AllottedGeometry.GetAccumulatedRenderTransform();
 	const FColor Tint = InColor.ToFColor(true);
 	TArray<FSlateVertex> Verts;
 	Verts.Reserve(Indices.Num());
-	for (int32 i = 0; i < Indices.Num(); ++i)
+	if (bSmoothContourActive)
 	{
-		Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(Vertices[Indices[i]]), FVector2f::ZeroVector, Tint));
+		for (int32 i = 0; i < Indices.Num(); ++i)
+		{
+			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(Vertices[Indices[i]]), FVector2f::ZeroVector, Tint));
+		}
+	}
+	else
+	{
+		for (int32 i = 0; i < Indices.Num(); ++i)
+		{
+			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(Vertices[Indices[i]]), FVector2f::ZeroVector, Tint));
+		}
 	}
 	TArray<SlateIndex> Indexes;
 	Indexes.Reserve(Indices.Num());
@@ -341,7 +286,7 @@ void SSCADAPolygon::DrawPolygonFill(FSlateWindowElementList& OutDrawElements, in
 	const TArray<FVector2D>& Vertices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const
 {
 	TArray<int32> Triangles;
-	if (!TriangulatePolygonEarClipping(Vertices, Triangles))
+	if (!SCADAStroke::TriangulateEarClipping(Vertices, Triangles))
 	{
 		return; // 三角化失败：静默跳过，只画边框
 	}

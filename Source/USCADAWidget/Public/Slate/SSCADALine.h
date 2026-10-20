@@ -83,6 +83,14 @@ protected:
 	 *  用于消除粗线在拐点处的接缝缺口：调用方固定传 线宽/2，细线圆弧极小不可感知。
 	 *  Radius <= 0 或点数 < 3 → 原样输出；退化（共线/近掉头）顶点保持尖角。输出仍是一条完整折线。 */
 	void BuildRoundedPolyline(const TArray<FVector2D>& In, float Radius, TArray<FVector2D>& Out) const;
+	/** CustomVerts 图元（多边形填充/环带、箭头、点方块）无抗锯齿的**轮廓抗锯齿覆层**：
+	 *  沿闭合轮廓画一次同色闭口 AA 线（MakeLines bAntialias=true，厚度 3 屏幕像素——
+	 *  5.7 的 thickness 参数即屏幕像素语义）。两侧各 1px 渐变 + 中间 1px 实心核，正好
+	 *  覆盖被覆边缘的 ±1px 像素量化区，外包络成为覆层的渐变边；颜色与被覆图元完全
+	 *  一致，不形成可见描边。注意：厚度传 1 只有两个软边没有实心核，盖不住硬台阶
+	 *  （实测教训）；屏幕宽度固定，任何缩放下柔边外观一致。 */
+	void DrawContourAA(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FPaintGeometry& PaintGeom,
+		const TArray<FVector2D>& ClosedLoop, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const;
 
 protected:
 	// protected：供子类（SSCADAPolygon 等）复用属性与绘制辅助

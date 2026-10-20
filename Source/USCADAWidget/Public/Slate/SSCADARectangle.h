@@ -41,6 +41,14 @@ public:
 	/** 圆角高度（角弧 Y 半径，像素，0 = 直角，≤ min(宽,高)/2） */
 	void SetCornerRadiusY(float InRadiusY);
 
+protected:
+	/** 直角（两轴圆角任一为 0）或等半径圆角（RX=RY）时报告解析几何：SDF 直角/等半径圆角矩形
+	 *  （两轴椭圆角 SDF 每角单标量表示不了，自动回退采样管线）。 */
+	virtual bool TryGetAnalyticBox(FAnalyticBox& OutBox) const override;
+
+	/** 存在椭圆角弧采样时轮廓含曲线，绘制层不做整数取整（直边端点本就是整数，不受影响） */
+	virtual bool PaintsSmoothContour() const override { return CornerRadiusX > 0.0f && CornerRadiusY > 0.0f; }
+
 private:
 	/** 按当前尺寸/圆角重采样周点列并写入 Points（本地空间 (0,0,Width,Height)） */
 	void ResamplePerimeter();

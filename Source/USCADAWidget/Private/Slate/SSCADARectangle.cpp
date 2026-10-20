@@ -38,6 +38,30 @@ void SSCADARectangle::SetCornerRadiusY(float InRadiusY)
 	ResamplePerimeter();
 }
 
+bool SSCADARectangle::TryGetAnalyticBox(FAnalyticBox& OutBox) const
+{
+	// 与 ResamplePerimeter 相同的钳位规则求有效圆角
+	const float MaxR = FMath::Min(Width, Height) * 0.5f;
+	const float RX = FMath::Clamp(CornerRadiusX, 0.0f, MaxR);
+	const float RY = FMath::Clamp(CornerRadiusY, 0.0f, MaxR);
+
+	// 两轴均为正的椭圆角：SDF 每角只有单标量半径，两轴不等表示不了 → 回退采样管线
+	float R = 0.0f;
+	if (RX > 0.0f && RY > 0.0f)
+	{
+		if (!FMath::IsNearlyEqual(RX, RY, 0.01f))
+		{
+			return false;
+		}
+		R = RX;
+	}
+
+	OutBox.TopLeft = FVector2D::ZeroVector;
+	OutBox.Size = FVector2D(Width, Height);
+	OutBox.CornerRadius = R;
+	return true;
+}
+
 void SSCADARectangle::ResamplePerimeter()
 {
 	// 圆角半径钳到合法范围：[0, min(宽,高)/2]

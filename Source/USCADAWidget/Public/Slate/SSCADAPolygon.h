@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "Slate/SSCADALine.h"
 #include "SCADAWidgetTypes.h"
 
@@ -10,6 +11,12 @@
  * 底层 Slate 多边形控件：闭合折线（首尾相连）+ 填充（对应 WinCC 的“多边形”对象）。
  * 继承 SSCADALine，复用其像素对齐、虚线/点线模式采样、圆连接（Round Join）与
  * 全局闪烁相位逻辑；绘制顺序为“先填充、后边框”：
+ *  - **解析几何快速路径（优先于采样管线）**：子类重写 TryGetAnalyticBox 返回 true 时
+ *    （精确圆 / 直角或等半径圆角矩形），实线样式下单次 MakeBox + FSlateRoundedBoxBrush
+ *    完成填充+内画边框——引擎解析距离场 SDF 着色器（零折线感 + 解析抗锯齿，
+ *    SlateShaderCommon.ush GetRoundedBoxDistance）；边框 Width/圆角都是局部单位，
+ *    随渲染变换视觉等比，无需 RenderScale 补偿。条件不满足（虚线样式 / 内缩会坍塌 /
+ *    两轴椭圆角 / 不等轴椭圆）自动回退下面的采样管线，语义不变。
  *  - 填充（FillPattern=Solid）：耳切三角化（支持凹多边形）+ 一次 MakeCustomVerts 实心三角扇；
  *    三角化失败时静默跳过（只画边框）。
  *  - 边框：**内画 + 显式更高绘制层**——几何数据（Points/半径/矩形尺寸）= 外轮廓 =
@@ -49,7 +56,36 @@ public:
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
 		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 
+protected:
+	/** RoundedBox SDF 解析几何参数（本地空间） */
+	struct FAnalyticBox
+	{
+		FVector2D TopLeft = FVector2D::ZeroVector;
+		FVector2D Size = FVector2D::ZeroVector;
+		float CornerRadius = 0.0f;
+	};
+
+	/** 子类当前几何能精确表示为单个圆角矩形时返回 true（OnPaint 仅在 LineStyle=Solid 时探测，
+	 *  并由调用方额外校验边框宽度不会使内轮廓坍塌 T < min(宽,高)/2）。返回 true 时本控件的
+	 *  填充+实线边框改由一次 MakeBox（RoundedBox SDF）绘制：解析曲线 + 解析覆盖率抗锯齿，
+	 *  绕开采样点列/耳切三角化/环带条带；其余样式与情况仍走采样管线。
+	 *  实现者：SSCADAEllipse（RadiusX=RadiusY 的正圆）、SSCADARectangle（直角或 RX=RY 等半径圆角）。 */
+	virtual bool TryGetAnalyticBox(FAnalyticBox& OutBox) const { return false; }
+
+	/** 本控件当前绘制的轮廓是否为曲线（椭圆周 / 椭圆角弧）。true 时 OnPaint 跳过 Slate 层
+	 *  整数取整（SnapToPixel 与 CustomVerts 顶点取整）——顶点取整会对密集采样的曲线在
+	 *  每段间引入 ~0.3px 阶梯抖动，被 1px AA 覆层放大成肉眼可见的波浪；直线类图元保持
+	 *  true（像素对齐约定对其有益）。SDF 快速路径不经过此开关。 */
+	virtual bool PaintsSmoothContour() const { return false; }
+
+	/** SDF 填充+边框 brush（OnPaint 每次改写圆角/边框参数；本体恒白色，填充色经 MakeBox Tint 传入） */
+	mutable FSlateRoundedBoxBrush AnalyticFillBrush = FSlateRoundedBoxBrush(FLinearColor::White);
+
 private:
+	/** 本次绘制是否为平滑曲线轮廓（OnPaint 开头由 PaintsSmoothContour() 设置，仅同帧内有效，
+	 *  DrawTriangleList 据此选择顶点取整模式） */
+	mutable bool bSmoothContourActive = false;
+
 	/** 画多边形填充：耳切三角化（支持凹多边形）后用 DrawTriangleList 一次画出；
 	 *  三角化失败（退化/自交/共线）时静默返回。 */
 	void DrawPolygonFill(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,

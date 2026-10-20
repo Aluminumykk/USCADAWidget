@@ -42,6 +42,21 @@ void SSCADAEllipse::SetLocalCenter(FVector2D InCenter)
 	ResamplePerimeter();
 }
 
+bool SSCADAEllipse::TryGetAnalyticBox(FAnalyticBox& OutBox) const
+{
+	// 仅正圆走 SDF（半径数据层已取整，两半径来自同一整型值时严格相等，容差只兜历史浮点）；
+	// 非等轴椭圆 SDF 无两轴半径可表达，返回 false 回退采样管线
+	if (!FMath::IsNearlyEqual(RadiusX, RadiusY, 0.01f))
+	{
+		return false;
+	}
+	// 圆心半径换算成包围盒（LocalCenter 为显式指定值时同样精确——设计器拖动中槽不是正方形）
+	OutBox.TopLeft = LocalCenter - FVector2D(RadiusX, RadiusX);
+	OutBox.Size = FVector2D(RadiusX * 2.0, RadiusX * 2.0);
+	OutBox.CornerRadius = RadiusX; // 正方形 + 半径=边长一半 = SDF 数学精确整圆
+	return true;
+}
+
 void SSCADAEllipse::ResamplePerimeter()
 {
 	// 采样数自适应周长：约每 4px 一段，Clamp 32~256（大半径/粗线下圆仍光滑）

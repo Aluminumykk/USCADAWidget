@@ -35,6 +35,14 @@ public:
 	 *  圆控件在设计器拖动中槽不是正方形，圆心不一定在槽内 (R,R) 处，由控件层换算后传入。 */
 	void SetLocalCenter(FVector2D InCenter);
 
+protected:
+	/** RadiusX=RadiusY（正圆）时报告解析几何：SDF 精确整圆（数据层半径为整数，两半径恒同步，
+	 *  圆控件走这条路径；椭圆控件非等轴时自动回退采样管线）。 */
+	virtual bool TryGetAnalyticBox(FAnalyticBox& OutBox) const override;
+
+	/** 椭圆轮廓是曲线：绘制层不做整数取整（见基类说明） */
+	virtual bool PaintsSmoothContour() const override { return true; }
+
 private:
 	/** 按当前半径/本地中心重采样椭圆周点列并写入 Points */
 	void ResamplePerimeter();

@@ -4,7 +4,6 @@
 
 #include "Slate/SSCADARectangle.h"
 #include "Components/CanvasPanelSlot.h"
-#include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "USCADAWidget"
 
@@ -12,60 +11,10 @@ TSharedRef<SWidget> USCADARectangleWidget::RebuildWidget()
 {
 	MyRectangle = SNew(SSCADARectangle);
 
-	// UWidget 没有原生 Tick，借 Slate 层的 Tick 轮询槽矩形变化。
-	// 槽同步状态机纯服务 UMG 设计器（拖动回写/面板编辑/撤销识别/落点认领），
-	// 运行时（PIE/游戏世界）不挂接（GetWorld()==nullptr 仍认编辑器：设计器预览实例可能拿不到世界）
-	if (GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-	{
-		TWeakObjectPtr<USCADARectangleWidget> WeakThis(this);
-		MyRectangle->ExternalTickCallback = [WeakThis]()
-		{
-			if (WeakThis.IsValid())
-			{
-				WeakThis->CheckSlotSync();
-			}
-		};
-	}
-
-	// archetype 实例（Slate 不一定被 Tick）也要能跑 CheckSlotSync，
-	// 否则面板拖放的落点（静默写在 archetype 槽上）永远认领不到
-	EnsureCoreTicker();
+	// 挂接 Slate Tick 回调 + 注册核心 Ticker 兜底（编辑器/非游戏世界守卫在基类内部）
+	SetupSlotSyncCallbacks(MyRectangle.Get());
 
 	return MyRectangle.ToSharedRef();
-}
-
-void USCADARectangleWidget::EnsureCoreTicker()
-{
-	if (CoreTickerHandle.IsValid())
-	{
-		return;
-	}
-	// 槽同步轮询纯服务 UMG 设计器：运行时（PIE/游戏世界）不注册核心 Ticker
-	// （RebuildWidget/ForceSyncFromSlotRect 两处注册路径都经过这里，一处守卫全部生效）
-	if (!GIsEditor || (GetWorld() && GetWorld()->IsGameWorld()))
-	{
-		return;
-	}
-	TWeakObjectPtr<USCADARectangleWidget> WeakThis(this);
-	CoreTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
-	{
-		if (WeakThis.IsValid())
-		{
-			WeakThis->CheckSlotSync();
-			return true;
-		}
-		return false;
-	}));
-}
-
-void USCADARectangleWidget::BeginDestroy()
-{
-	if (CoreTickerHandle.IsValid())
-	{
-		FTSTicker::GetCoreTicker().RemoveTicker(CoreTickerHandle);
-		CoreTickerHandle.Reset();
-	}
-	Super::BeginDestroy();
 }
 
 void USCADARectangleWidget::SynchronizeProperties()
@@ -119,9 +68,10 @@ void USCADARectangleWidget::SnapPropertiesToPixel()
 	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 }
 
-FVector2D USCADARectangleWidget::GetGeometryMin() const
+void USCADARectangleWidget::GetGeometryBounds(FVector2D& OutMin, FVector2D& OutMax) const
 {
-	return Position;
+	OutMin = Position;
+	OutMax = Position + Size;
 }
 
 void USCADARectangleWidget::TranslateGeometryBy(const FVector2D& Delta)
@@ -129,205 +79,8 @@ void USCADARectangleWidget::TranslateGeometryBy(const FVector2D& Delta)
 	Position += Delta;
 }
 
-void USCADARectangleWidget::SyncSlotFromGeometry()
+void USCADARectangleWidget::MapSlotToGeometry(UCanvasPanelSlot* CanvasSlot, const FVector2D& RawPos, const FVector2D& RawSize, bool bInteractionStart)
 {
-	if (bSyncingGeometry)
-	{
-		return;
-	}
-	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot);
-	if (!CanvasSlot)
-	{
-		PushGeometryToSlate();
-		return;
-	}
-
-	TGuardValue<bool> Guard(bSyncingGeometry, true);
-
-	// 槽矩形 = 矩形本身（位置 + 正尺寸）
-	const FVector2D ClampedSize(FMath::Max(Size.X, 1.0), FMath::Max(Size.Y, 1.0));
-
-	CanvasSlot->SetAutoSize(false);
-	CanvasSlot->SetPosition(Position);
-	CanvasSlot->SetSize(ClampedSize);
-	CachedSlotPos = Position;
-	CachedSlotSize = ClampedSize;
-	bSlotCacheValid = true;
-	// 几何数据为真值：任何正向同步都复位交互簿记（符号基线/收尾标记）
-	bPrevRawNegX = false;
-	bPrevRawNegY = false;
-	bPendingFinalize = false;
-
-	PushGeometryToSlate();
-}
-
-void USCADARectangleWidget::ForceSyncFromSlotRect()
-{
-	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot))
-	{
-		EnsureCoreTicker();
-		// 属性面板编辑/方向键微调等合法输入通道：授权一次映射（撤销/编译等后台重写不走这里）
-		bSlotRemapAuthorized = true;
-		CheckSlotSync();
-	}
-}
-
-void USCADARectangleWidget::CheckSlotSync()
-{
-	if (bSyncingGeometry)
-	{
-		return;
-	}
-
-	// 设计器拖动/拉伸槽的处理（显示与存储分离：位置/尺寸是唯一真值，槽只是操作手柄）。
-	// 槽永远保持正向规范矩形（min 位置 + 正尺寸），布局不受负尺寸影响，绘制不跳；
-	// 位置/尺寸映射在规范空间增量进行；矩形在自身内镜像 = 自身，翻转沿为 no-op。
-	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot);
-	if (!CanvasSlot)
-	{
-		return;
-	}
-
-	const FVector2D RawPos = CanvasSlot->GetPosition();
-	const FVector2D RawSize = CanvasSlot->GetSize();
-
-	// 缓存未初始化（新实例首次 Tick）：只采纳当前槽矩形为基准，不做映射，
-	// 否则默认 1x1 缓存会把健康槽矩形误判成外部缩放输入，把尺寸放大到爆炸。
-	if (!bSlotCacheValid)
-	{
-		bSlotCacheValid = true;
-		// 初始放置认领：拖放时设计器可能在首次 Tick 之前就把槽写到落点（SynchronizeProperties
-		// 已跑过），若只采纳基准会把落点收下、数据留在默认位置（松手跳回原点）。
-		// 认领标记仍在时先平移数据到槽位置并正向对齐，再以对齐后的槽矩形为基准。
-		// 守卫限定设计器：UMG 设计器实例的 GetWorld() 返回编辑器世界（非空！），
-		// 用 !IsGameWorld() 放行编辑器/预览世界，只屏蔽 PIE/打包游戏。
-		if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-		{
-			bPendingInitialPlacement = false;
-			const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
-			TranslateGeometryBy(RawMin - GetGeometryMin());
-			SyncSlotFromGeometry();
-			CachedSlotPos = CanvasSlot->GetPosition();
-			CachedSlotSize = CanvasSlot->GetSize();
-		}
-		else
-		{
-			CachedSlotPos = RawPos;
-			CachedSlotSize = RawSize;
-		}
-		bPrevRawNegX = CachedSlotSize.X < 0.0;
-		bPrevRawNegY = CachedSlotSize.Y < 0.0;
-		return;
-	}
-
-	// 鼠标按键查询惰性化：稳态空转帧（槽矩形无变化，占绝大多数帧）不做这次哈希查找，
-	// 仅在收尾判定/授权门闸实际需要时才取值。
-	const auto IsLeftMouseDown = []() { return FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton); };
-
-	if (RawPos.Equals(CachedSlotPos) && RawSize.Equals(CachedSlotSize))
-	{
-		// 无新输入：作废未消耗的授权，避免遗留授权让下一次后台重写被误判成输入
-		bSlotRemapAuthorized = false;
-
-		// 设计器无新输入。鼠标左键仍按下 = 拖动中停顿，不收尾（保留符号沿状态）；
-		// 已松开 = 交互结束，收尾一次：取整、标脏、符号基线复位。
-		if (bPendingFinalize && !IsLeftMouseDown())
-		{
-			bPendingFinalize = false;
-			bInteractionModified = false;
-			bPrevRawNegX = false;
-			bPrevRawNegY = false;
-			SnapPropertiesToPixel();
-			SyncSlotFromGeometry();
-#if WITH_EDITOR
-			if (GIsEditor && !HasAnyFlags(RF_Transient))
-			{
-				MarkPackageDirty();
-			}
-#endif
-		}
-		else if (!bPendingFinalize && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-		{
-			// 失配自愈：撤销/后台恢复只还原了数据或槽的一边时（槽=缓存=拖拽后、
-			// 数据=拖拽前），数据包围盒与缓存不一致 → 以数据为真值对齐槽。
-			const FVector2D BoundsSize(FMath::Max(Size.X, 1.0), FMath::Max(Size.Y, 1.0));
-			if (!Position.Equals(CachedSlotPos) || !BoundsSize.Equals(CachedSlotSize))
-			{
-				SyncSlotFromGeometry();
-			}
-		}
-		return;
-	}
-
-	// 初始放置认领（设计器在首次同步之后才把槽写到落点，未经属性通知）：
-	// 平移数据到槽位置并正向对齐，不做映射。守卫限定设计器（编辑器/预览世界放行，
-	// PIE/打包游戏屏蔽），防止运行时外部代码改槽位置时误触发平移。
-	if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-	{
-		bPendingInitialPlacement = false;
-		// 消耗 ForceSyncFromSlotRect 置的一次性授权：若被认领先消耗不掉，
-		// 下一次后台重写会被误判成授权输入。
-		bSlotRemapAuthorized = false;
-		const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
-		TranslateGeometryBy(RawMin - GetGeometryMin());
-		SyncSlotFromGeometry();
-		return;
-	}
-
-	// 撤销/还原识别（先于授权门闸）：槽与当前数据包围盒完全一致、但与缓存不同 =
-	// 外部整体还原（撤销经事务序列化同时恢复槽和数据，二者天然一致）→ 对齐缓存即可，
-	// 绝不可映射——映射会按缓存比例缩放这份一致状态导致数据爆炸（撤销走样根因）。
-	// 真实拖动/面板输入时槽与数据必然不一致（数据滞后于槽）不会误判；误判也无害：
-	// 槽==包围盒时映射本就是恒等变换。撤销经属性通知到达时授权位可能为真，故必须在门闸前。
-	{
-		const FVector2D DataBoundsSize(FMath::Max(Size.X, 1.0), FMath::Max(Size.Y, 1.0));
-		if (RawPos.Equals(Position) && RawSize.Equals(DataBoundsSize))
-		{
-			bPendingFinalize = false;
-			bInteractionModified = false;
-			bPrevRawNegX = false;
-			bPrevRawNegY = false;
-			SyncSlotFromGeometry();
-			return;
-		}
-	}
-
-	// 撤销/后台重写识别：鼠标未按下且未经属性面板授权（bSlotRemapAuthorized）的槽输入
-	// 不是用户输入——撤销经事务序列化恢复槽/数据（不走属性通知通道），若当作设计器新输入
-	// 映射会把刚恢复的数据再改写一遍（撤销当下走样）。一律拒绝映射、以数据为真值对齐槽。
-	// 合法通道：设计器拖动（鼠标按下）、面板编辑/方向键微调/拖放落点（经
-	// NotifyContentSlotGeometryChanged → ForceSyncFromSlotRect 置一次性授权）。
-	if (!IsLeftMouseDown() && !bSlotRemapAuthorized)
-	{
-		bPendingFinalize = false;
-		bInteractionModified = false;
-		bPrevRawNegX = false;
-		bPrevRawNegY = false;
-		SyncSlotFromGeometry();
-#if WITH_EDITOR
-		if (GIsEditor && !HasAnyFlags(RF_Transient))
-		{
-			MarkPackageDirty();
-		}
-#endif
-		return;
-	}
-	bSlotRemapAuthorized = false;
-
-	// 设计器写入了新矩形（不变式：读到与缓存不同的值即外部输入）
-#if WITH_EDITOR
-	if (!bInteractionModified)
-	{
-		// 每次交互只进一次撤销事务
-		bInteractionModified = true;
-		if (GIsEditor && !HasAnyFlags(RF_Transient))
-		{
-			Modify();
-		}
-	}
-#endif
-	bPendingFinalize = true;
-
 	// 规范化：min 位置 + 正尺寸；记录原始符号（矩形镜像 = 自身，符号沿只做基线跟踪）
 	FVector2D CPos = RawPos;
 	FVector2D CSize = RawSize;

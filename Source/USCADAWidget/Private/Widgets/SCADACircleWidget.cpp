@@ -4,8 +4,6 @@
 
 #include "Slate/SSCADAEllipse.h"
 #include "Components/CanvasPanelSlot.h"
-#include "Containers/Ticker.h"
-#include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "USCADAWidget"
 
@@ -13,59 +11,15 @@ TSharedRef<SWidget> USCADACircleWidget::RebuildWidget()
 {
 	MyCircle = SNew(SSCADAEllipse);
 
-	// UWidget 没有原生 Tick，借 Slate 层的 Tick 轮询槽矩形变化。
-	// 槽同步状态机纯服务 UMG 设计器（拖动回写/面板编辑/撤销识别/落点认领），
-	// 运行时（PIE/游戏世界）不挂接（GetWorld()==nullptr 仍认编辑器：设计器预览实例可能拿不到世界）
-	if (GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-	{
-		TWeakObjectPtr<USCADACircleWidget> WeakThis(this);
-		MyCircle->ExternalTickCallback = [WeakThis]()
-		{
-			if (WeakThis.IsValid())
-			{
-				WeakThis->CheckSlotSync();
-			}
-		};
-	}
-
-	// archetype 实例（无 Slate）也要能 Tick：靠核心 Ticker 兜底，保证两实例状态机同步收尾
-	EnsureCoreTicker();
+	// 挂接 Slate Tick 回调 + 注册核心 Ticker 兜底（编辑器/非游戏世界守卫在基类内部）：
+	// 必须让所有实例都能 Tick——UMG 设计器里同一控件存在 WidgetTree(archetype，无 Slate)
+	// 与 WidgetTree_0(预览，有 Slate) 两个实例，设计器拖动会把槽矩形镜像写进两棵树，
+	// 两边各自映射；没有 Slate 的 archetype 若只能靠 Slate 层回调 Tick，就永远走不到
+	// 收尾（取整/复位/槽回正），两边状态（缓存/拖动起点/锁定模式）逐渐分叉，
+	// 编译时用 archetype 数据重建预览 → 显示回退/跳变。
+	SetupSlotSyncCallbacks(MyCircle.Get());
 
 	return MyCircle.ToSharedRef();
-}
-
-void USCADACircleWidget::EnsureCoreTicker()
-{
-	if (CoreTickerHandle.IsValid())
-	{
-		return;
-	}
-	// 槽同步轮询纯服务 UMG 设计器：运行时（PIE/游戏世界）不注册核心 Ticker
-	// （RebuildWidget/ForceSyncFromSlotRect 两处注册路径都经过这里，一处守卫全部生效）
-	if (!GIsEditor || (GetWorld() && GetWorld()->IsGameWorld()))
-	{
-		return;
-	}
-	TWeakObjectPtr<USCADACircleWidget> WeakThis(this);
-	CoreTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
-	{
-		if (WeakThis.IsValid())
-		{
-			WeakThis->CheckSlotSync();
-			return true;
-		}
-		return false;
-	}));
-}
-
-void USCADACircleWidget::BeginDestroy()
-{
-	if (CoreTickerHandle.IsValid())
-	{
-		FTSTicker::GetCoreTicker().RemoveTicker(CoreTickerHandle);
-		CoreTickerHandle.Reset();
-	}
-	Super::BeginDestroy();
 }
 
 void USCADACircleWidget::SynchronizeProperties()
@@ -122,9 +76,10 @@ void USCADACircleWidget::SnapPropertiesToPixel()
 	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 }
 
-FVector2D USCADACircleWidget::GetGeometryMin() const
+void USCADACircleWidget::GetGeometryBounds(FVector2D& OutMin, FVector2D& OutMax) const
 {
-	return Center - FVector2D(Radius, Radius);
+	OutMin = Center - FVector2D(Radius, Radius);
+	OutMax = Center + FVector2D(Radius, Radius);
 }
 
 void USCADACircleWidget::TranslateGeometryBy(const FVector2D& Delta)
@@ -132,232 +87,31 @@ void USCADACircleWidget::TranslateGeometryBy(const FVector2D& Delta)
 	Center += Delta;
 }
 
-void USCADACircleWidget::SyncSlotFromGeometry()
+void USCADACircleWidget::ResetInteractionState()
 {
-	if (bSyncingGeometry)
-	{
-		return;
-	}
-	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot);
-	if (!CanvasSlot)
-	{
-		PushGeometryToSlate();
-		return;
-	}
-
-	TGuardValue<bool> Guard(bSyncingGeometry, true);
-
-	// 槽矩形 = 圆的外接正方形 (Center - R, 2R)
-	const FVector2D Min(Center.X - Radius, Center.Y - Radius);
-	const float Side = FMath::Max(Radius * 2.0f, 1.0f);
-
-	CanvasSlot->SetAutoSize(false);
-	CanvasSlot->SetPosition(Min);
-	CanvasSlot->SetSize(FVector2D(Side, Side));
-	CachedSlotPos = Min;
-	CachedSlotSize = FVector2D(Side, Side);
-	bSlotCacheValid = true;
-	// 几何数据为真值：任何正向同步都复位交互簿记（符号基线/收尾标记/锚定状态）
-	bPrevRawNegX = false;
-	bPrevRawNegY = false;
-	bPendingFinalize = false;
 	bDragStartValid = false;
 	bDragModeLocked = false;
 	bCornerDrag = false;
 	bLastAnchorValidX = false;
 	bLastAnchorValidY = false;
+}
 
+void USCADACircleWidget::OnSlotCacheAdopted()
+{
 	PushGeometryToSlate();
 }
 
-void USCADACircleWidget::ForceSyncFromSlotRect()
+void USCADACircleWidget::MapSlotToGeometry(UCanvasPanelSlot* CanvasSlot, const FVector2D& RawPos, const FVector2D& RawSize, bool bInteractionStart)
 {
-	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot))
-	{
-		// archetype 实例（无 Slate）从这里首次触达，也要注册核心 Ticker
-		EnsureCoreTicker();
-		// 属性面板编辑槽的合法输入通道：授权一次映射（编译/后台重写不会走这里）
-		bSlotRemapAuthorized = true;
-		CheckSlotSync();
-	}
-}
-
-void USCADACircleWidget::CheckSlotSync()
-{
-	if (bSyncingGeometry)
-	{
-		return;
-	}
-
-	// 设计器拖动/拉伸槽的处理（显示与存储分离：圆心/半径是唯一真值，槽只是操作手柄）。
-	// 槽永远保持正向规范矩形（min 位置 + 正尺寸），布局不受负尺寸影响，绘制不跳。
-	// 无状态绝对映射：边长按拖动类型拆分（随锚点一次锁定，无逐帧切换跳变）——
+	// 无状态绝对映射（圆专用方案，不用增量缩放——统一标量系数作用在从槽左上角起的偏移上，
+	// 拖单边时另一轴偏移也被缩放，圆心会沿垂直方向漂移；增量累积还会放大浮点误差）。
+	// 边长按拖动类型拆分（随锚点一次锁定，无逐帧切换跳变）——
 	// 拖角 = min(宽, 高)（小边，圆恒内切设计器矩形，槽不扩展）；拖边 = 被拖轴尺寸（槽未拖轴绕圆心扩展到直径）；平移 = 小边；
 	// 圆心逐轴锚定（拖边 = 对边中心固定，拖角 = 对角固定，整体拖 = 随矩形平移），
 	// 锚点在**一次拖动内锁定**（首个移动帧记录固定边/角的物理坐标），中途换向/翻过锚点自动镜像不丢锚；
 	// 槽写回时任一轴小于圆直径则绕圆心扩展该轴（圆恒在插槽内，拖边外拉时两边一起变）；
-	// 收尾才把槽对齐回外接正方形；翻转沿天然无感（no-op）。
-	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot);
-	if (!CanvasSlot)
-	{
-		return;
-	}
-
-	const FVector2D RawPos = CanvasSlot->GetPosition();
-	const FVector2D RawSize = CanvasSlot->GetSize();
-
-	// 缓存未初始化（新实例首次 Tick）：只采纳当前槽矩形为基准，不做映射，
-	// 否则默认 1x1 缓存会把健康槽矩形误判成外部缩放输入，把半径放大到爆炸。
-	if (!bSlotCacheValid)
-	{
-		bSlotCacheValid = true;
-		// 初始放置认领：拖放时设计器可能在首次 Tick 之前就把槽写到落点（SynchronizeProperties
-		// 已跑过），若只采纳基准会把落点收下、数据留在默认位置（松手跳回原点）。
-		// 认领标记仍在时先平移数据到槽位置并正向对齐，再以对齐后的槽矩形为基准。
-		// 守卫限定设计器：UMG 设计器实例的 GetWorld() 返回编辑器世界（非空！），
-		// 用 !IsGameWorld() 放行编辑器/预览世界，只屏蔽 PIE/打包游戏。
-		if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-		{
-			bPendingInitialPlacement = false;
-			const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
-			TranslateGeometryBy(RawMin - GetGeometryMin());
-			SyncSlotFromGeometry();
-			CachedSlotPos = CanvasSlot->GetPosition();
-			CachedSlotSize = CanvasSlot->GetSize();
-		}
-		else
-		{
-			CachedSlotPos = RawPos;
-			CachedSlotSize = RawSize;
-		}
-		bPrevRawNegX = RawSize.X < 0.0;
-		bPrevRawNegY = RawSize.Y < 0.0;
-		// 编译/重建可能把 SynchronizeProperties 跑在槽挂上或槽位置恢复之前，
-		// 那时算出的 LocalCenter 是错的并会一直留在 Slate 层（半径不受影响 → 大小对、位置突变）。
-		// 槽就位后的首个 Tick 这里补一次推送，保证 LocalCenter 按真实槽位置换算。
-		PushGeometryToSlate();
-		return;
-	}
-
-	// 鼠标按键查询惰性化：稳态空转帧（槽矩形无变化，占绝大多数帧）不做这次哈希查找，
-	// 仅在收尾判定/授权门闸实际需要时才取值。
-	const auto IsLeftMouseDown = []() { return FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton); };
-
-	if (RawPos.Equals(CachedSlotPos) && RawSize.Equals(CachedSlotSize))
-	{
-		// 无新输入：作废未消耗的授权，避免遗留授权让下一次后台重写被误判成输入
-		bSlotRemapAuthorized = false;
-
-		// 设计器无新输入。鼠标左键仍按下 = 拖动中停顿，不收尾（保留符号沿状态）；
-		// 已松开 = 交互结束，收尾一次：取整、标脏、符号基线复位。
-		if (bPendingFinalize && !IsLeftMouseDown())
-		{
-			bPendingFinalize = false;
-			bInteractionModified = false;
-			bPrevRawNegX = false;
-			bPrevRawNegY = false;
-			bDragStartValid = false;
-			bDragModeLocked = false;
-			bCornerDrag = false;
-			bLastAnchorValidX = false;
-			bLastAnchorValidY = false;
-			SnapPropertiesToPixel();
-			SyncSlotFromGeometry();
-#if WITH_EDITOR
-			if (GIsEditor && !HasAnyFlags(RF_Transient))
-			{
-				MarkPackageDirty();
-			}
-#endif
-		}
-		else if (!bPendingFinalize && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-		{
-			// 失配自愈：撤销/后台恢复只还原了数据或槽的一边时（槽=缓存=拖拽后、
-			// 数据=拖拽前），数据包围盒与缓存不一致 → 以数据为真值对齐槽。
-			const FVector2D BoundsMin = Center - FVector2D(Radius, Radius);
-			const FVector2D BoundsSize(FMath::Max(Radius * 2.0, 1.0), FMath::Max(Radius * 2.0, 1.0));
-			if (!BoundsMin.Equals(CachedSlotPos) || !BoundsSize.Equals(CachedSlotSize))
-			{
-				SyncSlotFromGeometry();
-			}
-		}
-		return;
-	}
-
-	// 初始放置认领（设计器在首次同步之后才把槽写到落点，未经属性通知）：
-	// 平移数据到槽位置并正向对齐，不做映射。守卫限定设计器（编辑器/预览世界放行，
-	// PIE/打包游戏屏蔽），防止运行时外部代码改槽位置时误触发平移。
-	if (bPendingInitialPlacement && GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
-	{
-		bPendingInitialPlacement = false;
-		// 消耗 ForceSyncFromSlotRect 置的一次性授权：若被认领先消耗不掉，
-		// 下一次后台重写会被误判成授权输入。
-		bSlotRemapAuthorized = false;
-		const FVector2D RawMin = RawPos + FVector2D(FMath::Min((float)RawSize.X, 0.0f), FMath::Min((float)RawSize.Y, 0.0f));
-		TranslateGeometryBy(RawMin - GetGeometryMin());
-		SyncSlotFromGeometry();
-		return;
-	}
-
-	// 撤销/还原识别（先于授权门闸）：槽与当前数据包围盒完全一致、但与缓存不同 =
-	// 外部整体还原（撤销经事务序列化同时恢复槽和数据，二者天然一致）→ 对齐缓存即可，
-	// 绝不可映射——映射会按缓存比例缩放这份一致状态导致数据爆炸（撤销走样根因）。
-	// 真实拖动/面板输入时槽与数据必然不一致（数据滞后于槽）不会误判；误判也无害：
-	// 槽==包围盒时映射本就是恒等变换。撤销经属性通知到达时授权位可能为真，故必须在门闸前。
-	{
-		const FVector2D DataMin = Center - FVector2D(Radius, Radius);
-		const FVector2D DataBoundsSize(FMath::Max(Radius * 2.0, 1.0), FMath::Max(Radius * 2.0, 1.0));
-		if (RawPos.Equals(DataMin) && RawSize.Equals(DataBoundsSize))
-		{
-			bPendingFinalize = false;
-			bInteractionModified = false;
-			bDragStartValid = false;
-			bDragModeLocked = false;
-			bCornerDrag = false;
-			bLastAnchorValidX = false;
-			bLastAnchorValidY = false;
-			SyncSlotFromGeometry();
-			return;
-		}
-	}
-
-	// 后台重写识别：鼠标未按下且未经属性面板授权（bSlotRemapAuthorized）的槽输入，
-	// 不是用户输入——是设计器后台重写（编译重建后恢复几何、松手提交拖拽矩形等）。
-	// 一律拒绝映射、以数据为真值对齐槽；否则拖边后编译时设计器重写的拖拽矩形会被误判成
-	// "平移"交互（锚已复位 → 圆心取矩形中心、半径取小边 = 拖动前的值），数据被改回去。
-	if (!IsLeftMouseDown() && !bSlotRemapAuthorized)
-	{
-		bPendingFinalize = false;
-		bInteractionModified = false;
-		bDragStartValid = false;
-		bDragModeLocked = false;
-		bCornerDrag = false;
-		bLastAnchorValidX = false;
-		bLastAnchorValidY = false;
-		SyncSlotFromGeometry();
-#if WITH_EDITOR
-		if (GIsEditor && !HasAnyFlags(RF_Transient))
-		{
-			MarkPackageDirty();
-		}
-#endif
-		return;
-	}
-	bSlotRemapAuthorized = false;
-
-	// 设计器写入了新矩形（不变式：读到与缓存不同的值即外部输入）
-#if WITH_EDITOR
-	if (!bInteractionModified)
-	{
-		// 每次交互只进一次撤销事务
-		bInteractionModified = true;
-		if (GIsEditor && !HasAnyFlags(RF_Transient))
-		{
-			Modify();
-		}
-	}
-#endif
-	bPendingFinalize = true;
+	// 翻转沿天然无感（no-op）。半径不下钳：尺寸穿过 ~0 的翻转过程中绝对映射天然恢复，
+	// 收尾 SnapPropertiesToPixel 才钳 ≥1。
 
 	// 规范化：min 位置 + 正尺寸；记录原始符号（圆镜像 = 自身，符号沿只做基线跟踪）
 	FVector2D CPos = RawPos;
@@ -368,10 +122,6 @@ void USCADACircleWidget::CheckSlotSync()
 	if (bNegY) { CPos.Y += CSize.Y; CSize.Y = -CSize.Y; }
 	bPrevRawNegX = bNegX;
 	bPrevRawNegY = bNegY;
-
-	// 无状态绝对映射（圆专用方案，不用增量缩放——统一标量系数作用在从槽左上角起的偏移上，
-	// 拖单边时另一轴偏移也被缩放，圆心会沿垂直方向漂移；增量累积还会放大浮点误差）。
-	// 半径不下钳：尺寸穿过 ~0 的翻转过程中绝对映射天然恢复，收尾 SnapPropertiesToPixel 才钳 ≥1。
 
 	// 拖动起点 = 首个输入帧的缓存矩形（交互前的槽矩形）；新拖动同时复位锚点滞后保持
 	if (!bDragStartValid)

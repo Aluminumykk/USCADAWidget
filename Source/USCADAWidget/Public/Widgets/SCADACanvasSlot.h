@@ -28,6 +28,7 @@ public:
 	virtual bool NudgeByDesigner(const FVector2D& NudgeDirection, const TOptional<int32>& GridSnapSize) override;
 #endif
 
-	/** 槽矩形发生变化后通知内容控件（如 USCADALineWidget 回写端点坐标） */
+	/** 槽矩形发生变化后通知内容控件（单次 Cast<USCADAPrimitiveWidgetBase> 经基类
+	 *  ForceSyncFromSlotRect 通道回写几何数据） */
 	void NotifyContentSlotGeometryChanged();
 };

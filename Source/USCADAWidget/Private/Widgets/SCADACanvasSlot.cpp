@@ -2,12 +2,7 @@
 
 #include "Widgets/SCADACanvasSlot.h"
 
-#include "Widgets/SCADALineWidget.h"
-#include "Widgets/SCADAPolylineWidget.h"
-#include "Widgets/SCADAPolygonWidget.h"
-#include "Widgets/SCADAEllipseWidget.h"
-#include "Widgets/SCADACircleWidget.h"
-#include "Widgets/SCADARectangleWidget.h"
+#include "Widgets/SCADAPrimitiveWidgetBase.h"
 
 #if WITH_EDITOR
 void USCADACanvasSlot::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
@@ -52,28 +47,10 @@ bool USCADACanvasSlot::NudgeByDesigner(const FVector2D& NudgeDirection, const TO
 
 void USCADACanvasSlot::NotifyContentSlotGeometryChanged()
 {
-	if (USCADALineWidget* Line = Cast<USCADALineWidget>(Content))
+	// 所有图元控件都继承 USCADAPrimitiveWidgetBase，单次 Cast 即可，
+	// 新控件只需继承基类、无需在此注册分支
+	if (USCADAPrimitiveWidgetBase* Primitive = Cast<USCADAPrimitiveWidgetBase>(Content))
 	{
-		Line->ForceSyncFromSlotRect();
-	}
-	else if (USCADAPolylineWidget* Polyline = Cast<USCADAPolylineWidget>(Content))
-	{
-		Polyline->ForceSyncFromSlotRect();
-	}
-	else if (USCADAPolygonWidget* Polygon = Cast<USCADAPolygonWidget>(Content))
-	{
-		Polygon->ForceSyncFromSlotRect();
-	}
-	else if (USCADAEllipseWidget* Ellipse = Cast<USCADAEllipseWidget>(Content))
-	{
-		Ellipse->ForceSyncFromSlotRect();
-	}
-	else if (USCADACircleWidget* Circle = Cast<USCADACircleWidget>(Content))
-	{
-		Circle->ForceSyncFromSlotRect();
-	}
-	else if (USCADARectangleWidget* Rectangle = Cast<USCADARectangleWidget>(Content))
-	{
-		Rectangle->ForceSyncFromSlotRect();
+		Primitive->ForceSyncFromSlotRect();
 	}
 }

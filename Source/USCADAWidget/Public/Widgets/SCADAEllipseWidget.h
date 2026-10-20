@@ -3,9 +3,7 @@
 #pragma once
 
 #include "SCADAWidgetTypes.h"
-#include "CoreMinimal.h"
-#include "Components/Widget.h"
-#include "Containers/Ticker.h"
+#include "Widgets/SCADAPrimitiveWidgetBase.h"
 #include "SCADAEllipseWidget.generated.h"
 
 class SSCADAEllipse;
@@ -19,9 +17,10 @@ class SSCADAEllipse;
  * 修改中心/半径 → 槽矩形自动更新；在设计器中拖动/拉伸控件 → 中心/半径自动平移/缩放。
  * 椭圆在自身包围盒内镜像 = 自身，拖过对边翻转天然无感（no-op）。
  * 输入时中心/半径/线宽取整到整数像素。
+ * 槽同步状态机骨架在基类 USCADAPrimitiveWidgetBase，本类只留映射核心（中心/半径增量缩放）。
  */
 UCLASS(meta = (DisplayName = "SCADA Ellipse", Category = "SCADA"))
-class USCADAWIDGET_API USCADAEllipseWidget : public UWidget
+class USCADAWIDGET_API USCADAEllipseWidget : public USCADAPrimitiveWidgetBase
 {
 	GENERATED_BODY()
 
@@ -106,76 +105,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Flash")
 	void SetFlashInverted(bool bInInverted);
 
-	/** 槽矩形被外部修改（设计器拖动/编辑槽属性）后由槽调用：以槽为准回写中心/半径并标脏资产 */
-	void ForceSyncFromSlotRect();
-
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void SynchronizeProperties() override;
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
-
-public:
-	virtual void BeginDestroy() override;
-
-private:
-	/** 注册核心 Ticker（幂等）：UMG 设计器双实例（archetype Outer=WidgetTree 无 Slate /
-	 *  预览 Outer=WidgetTree_0 有 Slate）都可能单独收到槽写入——尤其面板拖放的落点只静默
-	 *  写在 archetype 槽上且 archetype 的 Slate 不 Tick，没有核心 Ticker 就永远认领不到落点。
-	 *  RebuildWidget/ForceSyncFromSlotRect 惰性注册，BeginDestroy 注销 */
-	void EnsureCoreTicker();
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual const FText GetPaletteCategory() override;
 #endif
 
-private:
-	/** 把半径同步给 Slate 层（中心由槽位置决定，本地中心恒为 (RadiusX, RadiusY)） */
-	void PushGeometryToSlate();
-
+protected:
 	/** 数据层像素对齐：中心/半径/线宽取整到就近整数（半径/线宽最小 1） */
-	void SnapPropertiesToPixel();
+	virtual void SnapPropertiesToPixel() override;
 
-	/** 椭圆包围盒 → 槽矩形（编辑中心/半径后调用） */
-	void SyncSlotFromGeometry();
-
-	/** 几何数据包围盒左上角（初始放置认领用） */
-	FVector2D GetGeometryMin() const;
+	/** 椭圆包围盒 Min/Max = (Center - R, Center + R) */
+	virtual void GetGeometryBounds(FVector2D& OutMin, FVector2D& OutMax) const override;
 
 	/** 几何数据整体平移（初始放置认领用） */
-	void TranslateGeometryBy(const FVector2D& Delta);
+	virtual void TranslateGeometryBy(const FVector2D& Delta) override;
 
-	/** 由 Slate 层每帧回调：检测设计器拖动/拉伸。槽永远保持正向规范矩形；
-	 *  映射在规范空间增量进行；椭圆在自身包围盒内镜像 = 自身，翻转沿为 no-op；
-	 *  交互结束（槽稳定且鼠标松开）才取整/标脏/复位符号基线 */
-	void CheckSlotSync();
+	/** 把半径同步给 Slate 层（中心由槽位置决定，本地中心恒为 (RadiusX, RadiusY)） */
+	virtual void PushGeometryToSlate() override;
 
-private:
-	/** 上次写入槽的规范矩形（min 位置 + 正尺寸；槽永远保持正向，布局不受负尺寸影响）。
-	 *  不变式：我们写槽后必更新缓存，Tick 中读到与缓存不同的值即设计器新输入 */
-	FVector2D CachedSlotPos = FVector2D::ZeroVector;
-	FVector2D CachedSlotSize = FVector2D(1.0, 1.0);
-	/** 缓存是否已初始化。未初始化时首次 Tick 只采纳当前槽矩形为基准（不映射），
-	 *  否则默认 1x1 缓存会被当成一次从 1x1 开始的"拖动"，半径被爆炸性放大 */
-	bool bSlotCacheValid = false;
-	/** 初始放置认领标记：新实例首次发现槽位置与几何数据不一致时（设计器拖放落点），
-	 *  把几何数据平移到槽位置而不是把槽拉回数据原点；认领后或首次映射时复位 */
-	bool bPendingInitialPlacement = true;
-	/** 上一帧设计器原始槽尺寸的符号（跟踪符号基线；交互结束时复位。椭圆镜像 = 自身，不产生实际映射） */
-	bool bPrevRawNegX = false;
-	bool bPrevRawNegY = false;
-	/** 交互结束收尾：取整 + 标脏一次 */
-	bool bPendingFinalize = false;
-	/** 本次交互是否已 Modify（一次撤销事务） */
-	bool bInteractionModified = false;
-	/** 防止双向同步互相触发 */
-	bool bSyncingGeometry = false;
-	/** 一次性映射授权：属性面板编辑/方向键微调等合法"鼠标未按下改槽"经
-	 *  NotifyContentSlotGeometryChanged → ForceSyncFromSlotRect 置位；撤销/编译等后台重写
-	 *  走事务序列化（不经通知通道）无授权 → CheckSlotSync 拒绝映射、以数据为真值对齐槽 */
-	bool bSlotRemapAuthorized = false;
-	/** 核心 Ticker 句柄（EnsureCoreTicker 注册，BeginDestroy 注销） */
-	FTSTicker::FDelegateHandle CoreTickerHandle;
+	/** 映射核心：中心/半径规范空间增量缩放；椭圆镜像 = 自身，翻转沿只做符号基线跟踪 */
+	virtual void MapSlotToGeometry(UCanvasPanelSlot* CanvasSlot, const FVector2D& RawPos, const FVector2D& RawSize, bool bInteractionStart) override;
 
 protected:
 	TSharedPtr<SSCADAEllipse> MyEllipse;

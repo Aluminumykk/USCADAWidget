@@ -32,7 +32,7 @@ enum class ESCADALineCap : uint8
 {
 	/** 无：端点平切 */
 	None  UMETA(DisplayName = "无 None"),
-	/** 圆形：端点处画一个直径等于线宽、向外凸出的实心半圆 */
+	/** 圆形：端点处画一个直径等于线宽、向外凸出的实心圆盘 */
 	Round UMETA(DisplayName = "圆形 Round")
 };
 

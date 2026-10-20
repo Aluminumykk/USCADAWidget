@@ -2,8 +2,6 @@
 
 #include "USCADAWidget.h"
 
-#define LOCTEXT_NAMESPACE "FUSCADAWidgetModule"
-
 void FUSCADAWidgetModule::StartupModule()
 {
 }
@@ -11,7 +9,5 @@ void FUSCADAWidgetModule::StartupModule()
 void FUSCADAWidgetModule::ShutdownModule()
 {
 }
-
-#undef LOCTEXT_NAMESPACE
 
 IMPLEMENT_MODULE(FUSCADAWidgetModule, USCADAWidget)

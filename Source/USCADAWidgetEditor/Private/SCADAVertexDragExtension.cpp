@@ -216,6 +216,12 @@ FVector2D FSCADAVertexDragExtension::ScreenToDesign(const FVector2D& ScreenPos) 
 
 FVector2D FSCADAVertexDragExtension::GetHandleOffset(int32 Index) const
 {
+	// spare 手柄（超出当前顶点数）早退，跳过顶点查找与几何换算
+	if (Index >= GetVertexCount())
+	{
+		return FVector2D::ZeroVector;
+	}
+
 	FVector2D Vertex;
 	if (!GetVertex(Index, Vertex))
 	{

@@ -10,20 +10,19 @@ public class USCADAWidgetEditor : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
-			"Core",
-			"CoreUObject",
-			"Engine",
-			"USCADAWidget"
+			"Core"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"CoreUObject",
+			"Engine",
 			"Slate",
 			"SlateCore",
 			"InputCore",
 			"UMG",
-			"UnrealEd",
-			"UMGEditor"
+			"UMGEditor",
+			"USCADAWidget"
 		});
 	}
 }

@@ -14,7 +14,7 @@
  * 周点列是控件本地空间：中心恒为 (RadiusX, RadiusY)（槽矩形 = 椭圆包围盒）。
  * 采样数自适应周长（约每 4px 一段，Clamp 32~256），粗线/大半径下圆仍光滑。
  */
-class USCADAWIDGET_API SSCADAEllipse : public SSCADAPolygon
+class SSCADAEllipse : public SSCADAPolygon
 {
 public:
 	SLATE_BEGIN_ARGS(SSCADAEllipse)

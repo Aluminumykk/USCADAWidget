@@ -10,7 +10,7 @@
  * 底层 Slate 画线控件：绘制直线/折线（支持虚线、点线、端点箭头）。
  * 点坐标为控件本地空间（Local space），绘制前会做像素对齐（四舍五入到就近整数坐标）。
  */
-class USCADAWIDGET_API SSCADALine : public SLeafWidget
+class SSCADALine : public SLeafWidget
 {
 public:
 	SLATE_BEGIN_ARGS(SSCADALine)

@@ -34,7 +34,7 @@
  * 无箭头/端点样式。
  * 点坐标为控件本地空间（Local space），绘制前做像素对齐（与线同一规则）。
  */
-class USCADAWIDGET_API SSCADAPolygon : public SSCADALine
+class SSCADAPolygon : public SSCADALine
 {
 public:
 	SLATE_BEGIN_ARGS(SSCADAPolygon)

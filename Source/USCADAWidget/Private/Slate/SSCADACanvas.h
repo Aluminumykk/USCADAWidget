@@ -11,7 +11,7 @@
  * 所有子图元使用画布本地坐标（左上角为原点），Zoom 对子内容整体缩放渲染，
  * 便于跨平台/分辨率适配。后续扩展平移、对齐吸附等画面配置能力。
  */
-class USCADAWIDGET_API SSCADACanvas : public SConstraintCanvas
+class SSCADACanvas : public SConstraintCanvas
 {
 public:
 	SLATE_BEGIN_ARGS(SSCADACanvas)

@@ -15,7 +15,7 @@
  * 圆角半径 = WinCC 的“圆角宽度/圆角高度”（椭圆角弧的两轴，0 = 直角）；
  * 每角弧采样数自适应弧长（约每 4px 一段，Clamp 8~64）。
  */
-class USCADAWIDGET_API SSCADARectangle : public SSCADAPolygon
+class SSCADARectangle : public SSCADAPolygon
 {
 public:
 	SLATE_BEGIN_ARGS(SSCADARectangle)

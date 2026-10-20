@@ -8,6 +8,7 @@
 #include "Widgets/SCADAPolylineWidget.h"
 
 #include "Components/Widget.h"
+#include "Framework/Application/SlateApplication.h"
 #include "IUMGDesigner.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Images/SImage.h"
@@ -283,20 +284,48 @@ FReply FSCADAVertexDragExtension::HandleEndDrag(const FGeometry& Geometry, const
 {
 	if (bDragging && Index == DragIndex && Event.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
-		bDragging = false;
-		DragIndex = INDEX_NONE;
-
-		EndTransaction();
-
-		if (Designer != nullptr)
-		{
-			Designer->MarkDesignModifed(false);
-		}
+		FinalizeDrag();
 
 		return FReply::Handled().ReleaseMouseCapture();
 	}
 
 	return FReply::Unhandled();
+}
+
+void FSCADAVertexDragExtension::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+	// 收尾兜底：拖动进行中左键实际已松开、但 Up 事件未送达本手柄（切换选择/删除控件使扩展元素
+	// 重建、手柄 SBorder 销毁，或设计器失焦/ESC 使 Slate 强制释放捕获）时主动收尾，避免遗留未
+	// 关闭事务污染撤销栈与 bDragging 卡死。SDesignerView 每帧无条件 Tick 所有扩展（与选择状态、
+	// 手柄是否存在无关），故手柄整个消失的场景也能覆盖。
+	if (bDragging && !FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
+	{
+		FinalizeDrag();
+	}
+}
+
+void FSCADAVertexDragExtension::FinalizeDrag()
+{
+	// 幂等守卫：Slate 在同一帧内先路由输入事件再 Tick 控件，正常路径（Up 送达 HandleEndDrag）
+	// 已把 bDragging 复位，随后本帧 Tick 的兜底检测不会再进入。
+	if (!bDragging)
+	{
+		return;
+	}
+
+	bDragging = false;
+	DragIndex = INDEX_NONE;
+
+	EndTransaction();
+
+	if (Designer != nullptr)
+	{
+		Designer->MarkDesignModifed(false);
+	}
+
+	// 兜底路径不主动释放鼠标捕获：兜底触发即说明 Up 未送达，捕获已被 Slate 强制释放（捕获仍在
+	// 时 Up 必被路由回本手柄走正常路径）；ReleaseAllPointerCapture 会误放其它控件的捕获，且
+	// GetMouseCaptor 在 5.7 无公开查询入口。正常路径的释放仍由 HandleEndDrag 的 FReply 完成。
 }
 
 void FSCADAVertexDragExtension::ApplyVertexPosition(int32 Index, const FVector2D& NewDesignPos)

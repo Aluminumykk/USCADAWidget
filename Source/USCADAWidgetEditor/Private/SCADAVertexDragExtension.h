@@ -26,6 +26,9 @@ class UWidget;
  *   光标中心）+ 每帧同时写 Template/Preview 两个实例（双实例陷阱：两边槽缓存都要一致）。
  * - 写回走控件公开接口（折线 SetPoints / 线段 SetStartPoint、SetEndPoint）：内部完成
  *   像素取整 + 槽包围盒同步 + Slate 推送，运行时模块零改动。
+ * - 拖动收尾兜底：Up 事件未送达时（切换选择/删除控件重建扩展元素、手柄销毁，
+ *   或失焦/ESC 被 Slate 强制释放捕获）由每帧 Tick 检测左键实际状态主动收尾，
+ *   避免遗留未关闭事务污染撤销栈与 bDragging 卡死。
  */
 class FSCADAVertexDragExtension : public FDesignerExtension
 {
@@ -34,6 +37,7 @@ public:
 
 	virtual bool CanExtendSelection(const TArray<FWidgetReference>& Selection) const override;
 	virtual void ExtendSelection(const TArray<FWidgetReference>& Selection, TArray<TSharedRef<FDesignerSurfaceElement>>& SurfaceElements) override;
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
 private:
 	/** 手柄边长（设计器像素；Offset 里做居中修正） */
@@ -69,6 +73,10 @@ private:
 	FReply HandleBeginDrag(const FGeometry& Geometry, const FPointerEvent& Event, int32 Index);
 	FReply HandleDragging(const FGeometry& Geometry, const FPointerEvent& Event, int32 Index);
 	FReply HandleEndDrag(const FGeometry& Geometry, const FPointerEvent& Event, int32 Index);
+
+	/** 拖动收尾（状态复位 + EndTransaction + MarkDesignModifed），正常路径与兜底路径共用；
+	 *  幂等由 bDragging 守卫：正常 Up 已收尾时兜底不再二次执行 */
+	void FinalizeDrag();
 
 	/** 顶点新值写入 Template + Preview 双实例 */
 	void ApplyVertexPosition(int32 Index, const FVector2D& NewDesignPos);

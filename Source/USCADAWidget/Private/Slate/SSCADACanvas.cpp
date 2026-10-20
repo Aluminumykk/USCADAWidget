@@ -22,31 +22,35 @@ int32 SSCADACanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
 {
 	if (ShowGrid.Get())
 	{
-		const float Cell = FMath::Max(GridSize.Get() * Zoom.Get(), 2.0f);
-		const FVector2D Size = AllottedGeometry.GetLocalSize();
-		const FLinearColor LineColor = GridColor.Get() * InWidgetStyle.GetColorAndOpacityTint();
-		const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
-
-		// 注意：MakeLines 会把传入的点连成一条折线，
-		// 不相连的网格线必须每根独立调用一次，且坐标对齐到整数像素。
-		auto DrawGridLine = [&](const FVector2D& A, const FVector2D& B)
+		// 网格间距小于 6px（小 Zoom）时整段跳过：2px 网格既糊又会爆出上千根线
+		const float Cell = GridSize.Get() * Zoom.Get();
+		if (Cell >= 6.0f)
 		{
-			TArray<FVector2D> Pair = {
-				FVector2D(FMath::RoundToFloat(A.X), FMath::RoundToFloat(A.Y)),
-				FVector2D(FMath::RoundToFloat(B.X), FMath::RoundToFloat(B.Y))
+			const FVector2D Size = AllottedGeometry.GetLocalSize();
+			const FLinearColor LineColor = GridColor.Get() * InWidgetStyle.GetColorAndOpacityTint();
+			const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
+
+			// 注意：MakeLines 会把传入的点连成一条折线，
+			// 不相连的网格线必须每根独立调用一次，且坐标对齐到整数像素。
+			TArray<FVector2D> Pair;
+			Pair.SetNum(2);
+			auto DrawGridLine = [&](const FVector2D& A, const FVector2D& B)
+			{
+				Pair[0] = FVector2D(FMath::RoundToFloat(A.X), FMath::RoundToFloat(A.Y));
+				Pair[1] = FVector2D(FMath::RoundToFloat(B.X), FMath::RoundToFloat(B.Y));
+				FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, Pair, ESlateDrawEffect::None, LineColor, /*bAntialias=*/false, 1.0f);
 			};
-			FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, Pair, ESlateDrawEffect::None, LineColor, /*bAntialias=*/false, 1.0f);
-		};
 
-		for (float X = 0.f; X <= Size.X; X += Cell)
-		{
-			DrawGridLine(FVector2D(X, 0.f), FVector2D(X, Size.Y));
+			for (float X = 0.f; X <= Size.X; X += Cell)
+			{
+				DrawGridLine(FVector2D(X, 0.f), FVector2D(X, Size.Y));
+			}
+			for (float Y = 0.f; Y <= Size.Y; Y += Cell)
+			{
+				DrawGridLine(FVector2D(0.f, Y), FVector2D(Size.X, Y));
+			}
+			++LayerId;
 		}
-		for (float Y = 0.f; Y <= Size.Y; Y += Cell)
-		{
-			DrawGridLine(FVector2D(0.f, Y), FVector2D(Size.X, Y));
-		}
-		++LayerId;
 	}
 
 	return SConstraintCanvas::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);

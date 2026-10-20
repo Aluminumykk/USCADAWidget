@@ -3,13 +3,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Brushes/SlateRoundedBoxBrush.h"
 #include "Slate/SSCADALine.h"
 #include "SCADAWidgetTypes.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
 
 /**
  * 底层 Slate 多边形控件：闭合折线（首尾相连）+ 填充（对应 WinCC 的“多边形”对象）。
- * 继承 SSCADALine，复用其像素对齐、虚线/点线模式采样、圆连接（Round Join）与
+ * 继承 SSCADALine，复用其像素对齐、虚线/点线模式采样、拐角圆弧替换与
  * 全局闪烁相位逻辑；绘制顺序为“先填充、后边框”：
  *  - **解析几何快速路径（优先于采样管线）**：子类重写 TryGetAnalyticBox 返回 true 时
  *    （精确圆 / 直角或等半径圆角矩形），实线样式下单次 MakeBox + FSlateRoundedBoxBrush

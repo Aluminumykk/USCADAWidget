@@ -4,6 +4,9 @@
 
 #include "CoreMinimal.h"
 #include "Math/Vector2D.h"
+#include "Styling/SlateBrush.h"
+#include "Rendering/SlateResourceHandle.h"
+#include "Framework/Application/SlateApplication.h"
 
 /**
  * 笔画几何工具（Line/Polyline/Polygon 共享，避免复制漂移）。
@@ -19,6 +22,27 @@
  */
 namespace SCADAStroke
 {
+	/** 像素对齐：四舍五入到就近整数坐标 */
+	inline FVector2D SnapToPixel(const FVector2D& P)
+	{
+		return FVector2D(FMath::RoundToFloat(P.X), FMath::RoundToFloat(P.Y));
+	}
+
+	/** 无贴图纯色笔刷（画点样式的实心方块用） */
+	inline const FSlateBrush& GetSolidBrush()
+	{
+		static FSlateBrush Brush;
+		Brush.DrawAs = ESlateBrushDrawType::Box;
+		return Brush;
+	}
+
+	/** 纯色填充用的白色资源句柄：GetSolidBrush() 无贴图，渲染器回退 GWhiteTexture（与 MakeBox tint 填充同一条路径） */
+	inline const FSlateResourceHandle& GetWhiteFillHandle()
+	{
+		static FSlateResourceHandle Handle = FSlateApplication::Get().GetRenderer()->GetResourceHandle(GetSolidBrush());
+		return Handle;
+	}
+
 	/**
 	 * 耳切三角化（Ear Clipping）：把可能凹的简单多边形（顶点按序，顺/逆时针均可）
 	 * 拆成三角形索引组。相邻重复点自动去除；失败（共线退化/自交/无耳朵）返回 false，

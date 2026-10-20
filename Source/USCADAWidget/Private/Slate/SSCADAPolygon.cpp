@@ -9,26 +9,7 @@
 #include "Rendering/RenderingCommon.h"
 #include "Rendering/SlateResourceHandle.h"
 
-/** 像素对齐：四舍五入到就近整数坐标（与线同一规则） */
-static FVector2D SnapToPixel(const FVector2D& P)
-{
-	return FVector2D(FMath::RoundToFloat(P.X), FMath::RoundToFloat(P.Y));
-}
-
-/** 无贴图纯色笔刷（画点样式的实心方块用） */
-static const FSlateBrush& GetSolidBrush()
-{
-	static FSlateBrush Brush;
-	Brush.DrawAs = ESlateBrushDrawType::Box;
-	return Brush;
-}
-
-/** 纯色填充用的白色资源句柄：GetSolidBrush() 无贴图，渲染器回退 GWhiteTexture（与 MakeBox tint 填充同一条路径） */
-static const FSlateResourceHandle& GetWhiteFillHandle()
-{
-	static FSlateResourceHandle Handle = FSlateApplication::Get().GetRenderer()->GetResourceHandle(GetSolidBrush());
-	return Handle;
-}
+// 像素对齐 / 纯色笔刷 / 白色填充句柄已收进共享头 Slate/SCADAStrokeGeometry.h（SCADAStroke 命名空间）
 
 // 耳切三角化已移至共享头 Slate/SCADAStrokeGeometry.h（Line 笔画包络与此处填充共用一份实现）
 
@@ -62,7 +43,7 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	Poly.SetNumUninitialized(RawPoints.Num());
 	for (int32 i = 0; i < RawPoints.Num(); ++i)
 	{
-		Poly[i] = bSmoothContourActive ? RawPoints[i] : SnapToPixel(RawPoints[i]);
+		Poly[i] = bSmoothContourActive ? RawPoints[i] : SCADAStroke::SnapToPixel(RawPoints[i]);
 	}
 
 	// 闭合点列：原始点按序 + 首点回接
@@ -149,62 +130,63 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	if (LineThickness > KINDA_SMALL_NUMBER)
 	{
 		++LayerId; // 边框层：严格高于填充层
-		TArray<FVector2D> Ring;
-		if (BuildOffsetContour(Poly, LineThickness * 0.5f, Ring))
+		if (LineStyle.Get() == ESCADALineStyle::Solid)
 		{
-			if (LineStyle.Get() == ESCADALineStyle::Solid)
+			// 实心边框 = 环带四边形条带（不做耳切）：外环 = 原始轮廓（尖角精确到几何
+			// 顶点），内环 = 内缩 T 的轮廓；逐边两个三角形（外边缘 i→j + 内边缘 j→i），
+			// 相邻四边形共享边、零缝隙、无失败模式。注意**不能**把"外环正向 + 内环倒序"
+			// 拼成单环多边形做耳切——单桥接的环带在闭合边那一侧根本没被围进多边形
+			// （最后一段环带丢失）；描边方案在尖角处靠圆盘/斜接拐弯也盖不住角尖。
+			TArray<FVector2D> InnerRing;
+			if (BuildOffsetContour(Poly, LineThickness, InnerRing))
 			{
-				// 实心边框 = 环带四边形条带（不做耳切）：外环 = 原始轮廓（尖角精确到几何
-				// 顶点），内环 = 内缩 T 的轮廓；逐边两个三角形（外边缘 i→j + 内边缘 j→i），
-				// 相邻四边形共享边、零缝隙、无失败模式。注意**不能**把"外环正向 + 内环倒序"
-				// 拼成单环多边形做耳切——单桥接的环带在闭合边那一侧根本没被围进多边形
-				// （最后一段环带丢失）；描边方案在尖角处靠圆盘/斜接拐弯也盖不住角尖。
-				TArray<FVector2D> InnerRing;
-				if (BuildOffsetContour(Poly, LineThickness, InnerRing))
+				const int32 N = Poly.Num();
+				TArray<FVector2D> BandVerts;
+				BandVerts.Reserve(2 * N);
+				for (int32 i = 0; i < N; ++i)
 				{
-					const int32 N = Poly.Num();
-					TArray<FVector2D> BandVerts;
-					BandVerts.Reserve(2 * N);
-					for (int32 i = 0; i < N; ++i)
-					{
-						BandVerts.Add(Poly[i]);
-					}
-					for (int32 i = 0; i < N; ++i)
-					{
-						BandVerts.Add(InnerRing[i]);
-					}
-
-					TArray<int32> BandIndices;
-					BandIndices.Reserve(6 * N);
-					for (int32 i = 0; i < N; ++i)
-					{
-						const int32 j = (i + 1) % N;
-						BandIndices.Add(i);
-						BandIndices.Add(j);
-						BandIndices.Add(N + j);
-						BandIndices.Add(i);
-						BandIndices.Add(N + j);
-						BandIndices.Add(N + i);
-					}
-					DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, BandVerts, BandIndices, BorderFinalColor, DrawEffects);
-
-					// 环带外缘抗锯齿覆层：沿外轮廓（原始轮廓）覆一条 3 屏幕像素宽的同色
-					//（边框色）闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），
-					// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边。
-					DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, BorderFinalColor, DrawEffects);
-
-					// 环带内缘抗锯齿覆层（边框色，沿内缩轮廓）：内缘是边框与填充的交界，
-					// 此前是唯一未处理的硬曲线——直边多边形上不可见，但椭圆/圆角矩形的
-					// 弧形内缘会沿曲线显出锯齿；补齐后与 SDF 边框（内缘本有解析 AA）语义
-					// 对齐，直线图元同样受益（交界 1px 渐变属正常渲染器行为）。
-					DrawContourAA(OutDrawElements, LayerId, PaintGeom, InnerRing, BorderFinalColor, DrawEffects);
+					BandVerts.Add(Poly[i]);
 				}
+				for (int32 i = 0; i < N; ++i)
+				{
+					BandVerts.Add(InnerRing[i]);
+				}
+
+				TArray<int32> BandIndices;
+				BandIndices.Reserve(6 * N);
+				for (int32 i = 0; i < N; ++i)
+				{
+					const int32 j = (i + 1) % N;
+					BandIndices.Add(i);
+					BandIndices.Add(j);
+					BandIndices.Add(N + j);
+					BandIndices.Add(i);
+					BandIndices.Add(N + j);
+					BandIndices.Add(N + i);
+				}
+				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, BandVerts, BandIndices, BorderFinalColor, DrawEffects);
+
+				// 环带外缘抗锯齿覆层：沿外轮廓（原始轮廓）覆一条 3 屏幕像素宽的同色
+				//（边框色）闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），
+				// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边。
+				DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, BorderFinalColor, DrawEffects);
+
+				// 环带内缘抗锯齿覆层（边框色，沿内缩轮廓）：内缘是边框与填充的交界，
+				// 此前是唯一未处理的硬曲线——直边多边形上不可见，但椭圆/圆角矩形的
+				// 弧形内缘会沿曲线显出锯齿；补齐后与 SDF 边框（内缘本有解析 AA）语义
+				// 对齐，直线图元同样受益（交界 1px 渐变属正常渲染器行为）。
+				DrawContourAA(OutDrawElements, LayerId, PaintGeom, InnerRing, BorderFinalColor, DrawEffects);
 			}
-			else
+		}
+		else
+		{
+			// 虚线系：把尖角换成半径 线宽/2 的圆弧采样，让划线模式沿圆角流动。
+			// 从首边中点 M 出发、回到 M 收尾：所有原始顶点都成为内部点，全部被圆角化
+			// （BuildRoundedPolyline 不圆首/末点；M 与首边共线，无拐角）。内缩失败
+			// （轮廓坍塌）静默跳过边框。
+			TArray<FVector2D> Ring;
+			if (BuildOffsetContour(Poly, LineThickness * 0.5f, Ring))
 			{
-				// 虚线系：把尖角换成半径 线宽/2 的圆弧采样，让划线模式沿圆角流动。
-				// 从首边中点 M 出发、回到 M 收尾：所有原始顶点都成为内部点，全部被圆角化
-				// （BuildRoundedPolyline 不圆首/末点；M 与首边共线，无拐角）。
 				const FVector2D M = (Ring[0] + Ring[1]) * 0.5f;
 				TArray<FVector2D> Loop;
 				Loop.Reserve(Ring.Num() + 1);
@@ -229,7 +211,7 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 					if (DashIsDot.IsValidIndex(Seg) && DashIsDot[Seg])
 					{
 						// 点：严格 1:1 实心方块（边长 = 线宽），沿线段方向旋转（与线同一规则）
-						const FVector2D Center = SnapToPixel((A + B) * 0.5);
+						const FVector2D Center = SCADAStroke::SnapToPixel((A + B) * 0.5);
 						const FVector2D D = B - A;
 						const float Angle = FMath::Atan2((float)D.Y, (float)D.X);
 						const float S = LineThickness;
@@ -238,7 +220,22 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 							FSlateLayoutTransform(FVector2f((float)Center.X - S * 0.5f, (float)Center.Y - S * 0.5f)),
 							FSlateRenderTransform(FQuat2f(Angle)),
 							FVector2f(0.5f, 0.5f));
-						FSlateDrawElement::MakeBox(OutDrawElements, LayerId, DotGeom.ToPaintGeometry(), &GetSolidBrush(), DrawEffects, BorderFinalColor);
+						// NoPixelSnapping：旋转后方刷四角 = 设备空间的斜四边形，默认取整会把旋转角度量化
+						FSlateDrawElement::MakeBox(OutDrawElements, LayerId, DotGeom.ToPaintGeometry(), &SCADAStroke::GetSolidBrush(), DrawEffects | ESlateDrawEffect::NoPixelSnapping, BorderFinalColor);
+
+						// 点方块轮廓抗锯齿覆层（MakeBox 方刷无 AA；四角 = 中心 + 旋转 ±S/2，见 DrawContourAA 说明）
+						const float DotH = S * 0.5f;
+						const float CosA = FMath::Cos(Angle);
+						const float SinA = FMath::Sin(Angle);
+						auto RotCorner = [&](float X, float Y)
+						{
+							return FVector2D(Center.X + X * CosA - Y * SinA, Center.Y + X * SinA + Y * CosA);
+						};
+						const TArray<FVector2D> DotLoop =
+						{
+							RotCorner(-DotH, -DotH), RotCorner(DotH, -DotH), RotCorner(DotH, DotH), RotCorner(-DotH, DotH), RotCorner(-DotH, -DotH)
+						};
+						DrawContourAA(OutDrawElements, LayerId, PaintGeom, DotLoop, BorderFinalColor, DrawEffects);
 					}
 					else
 					{
@@ -284,7 +281,7 @@ void SSCADAPolygon::DrawTriangleList(FSlateWindowElementList& OutDrawElements, i
 	{
 		Indexes.Add(i);
 	}
-	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
+	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
 }
 
 void SSCADAPolygon::DrawPolygonFill(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,

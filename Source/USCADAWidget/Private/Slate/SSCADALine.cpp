@@ -10,26 +10,7 @@
 #include "Rendering/SlateResourceHandle.h"
 #include "Styling/SlateBrush.h"
 
-/** 像素对齐：四舍五入到就近整数坐标 */
-static FVector2D SnapToPixel(const FVector2D& P)
-{
-	return FVector2D(FMath::RoundToFloat(P.X), FMath::RoundToFloat(P.Y));
-}
-
-/** 无贴图纯色笔刷（画点样式的实心方块用） */
-static const FSlateBrush& GetSolidBrush()
-{
-	static FSlateBrush Brush;
-	Brush.DrawAs = ESlateBrushDrawType::Box;
-	return Brush;
-}
-
-/** 纯色填充用的白色资源句柄：GetSolidBrush() 无贴图，渲染器回退 GWhiteTexture（与 MakeBox tint 填充同一条路径） */
-static const FSlateResourceHandle& GetWhiteFillHandle()
-{
-	static FSlateResourceHandle Handle = FSlateApplication::Get().GetRenderer()->GetResourceHandle(GetSolidBrush());
-	return Handle;
-}
+// 像素对齐 / 纯色笔刷 / 白色填充句柄已收进共享头 Slate/SCADAStrokeGeometry.h（SCADAStroke 命名空间）
 
 /** 三角形列表实心填充（笔画包络用）：一次 MakeCustomVerts；顶点**不取整**（包络是亚像素精确
  *  轮廓，取整会把肘部圆弧量化成台阶；边缘柔化由沿包络的 DrawContourAA 覆层负责） */
@@ -50,7 +31,7 @@ static void DrawTriFilled(FSlateWindowElementList& OutDrawElements, int32 LayerI
 	{
 		Indexes.Add(static_cast<SlateIndex>(i));
 	}
-	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
+	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
 }
 
 void SSCADALine::Construct(const FArguments& InArgs)
@@ -123,7 +104,7 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 	Polyline.SetNumUninitialized(RawPolyline.Num());
 	for (int32 i = 0; i < RawPolyline.Num(); ++i)
 	{
-		Polyline[i] = SnapToPixel(RawPolyline[i]);
+		Polyline[i] = SCADAStroke::SnapToPixel(RawPolyline[i]);
 	}
 
 	// 拐角处理两条路线（实线包络法内部也复用圆弧替换，见 SCADAStrokeGeometry.h 设计说明）：
@@ -165,7 +146,7 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 	// 点样式的点：严格 1:1 的实心方块（边长 = 线宽），沿线段方向旋转
 	auto DrawDot = [&](const FVector2D& A, const FVector2D& B)
 	{
-		const FVector2D Center = SnapToPixel((A + B) * 0.5);
+		const FVector2D Center = SCADAStroke::SnapToPixel((A + B) * 0.5);
 		const FVector2D D = B - A;
 		const float Angle = FMath::Atan2((float)D.Y, (float)D.X);
 		const float S = LineThickness;
@@ -175,7 +156,7 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 			FSlateRenderTransform(FQuat2f(Angle)),
 			FVector2f(0.5f, 0.5f));
 		// NoPixelSnapping：旋转后方刷四角 = 设备空间的斜四边形，默认取整会把旋转角度量化
-		FSlateDrawElement::MakeBox(OutDrawElements, LayerId, DotGeom.ToPaintGeometry(), &GetSolidBrush(), DrawEffects | ESlateDrawEffect::NoPixelSnapping, FinalColor);
+		FSlateDrawElement::MakeBox(OutDrawElements, LayerId, DotGeom.ToPaintGeometry(), &SCADAStroke::GetSolidBrush(), DrawEffects | ESlateDrawEffect::NoPixelSnapping, FinalColor);
 
 		// 点方块轮廓抗锯齿覆层（MakeBox 方刷无 AA；四角 = 中心 + 旋转 ±S/2，见 DrawContourAA 说明）
 		const float DotH = S * 0.5f;
@@ -294,7 +275,7 @@ FVector2D SSCADALine::ComputeDesiredSize(float LayoutScaleMultiplier) const
 	FVector2D Max(1.0, 1.0);
 	for (const FVector2D& P : Points.Get())
 	{
-		Max = FVector2D::Max(Max, SnapToPixel(P));
+		Max = FVector2D::Max(Max, SCADAStroke::SnapToPixel(P));
 	}
 	return Max;
 }
@@ -445,7 +426,7 @@ void SSCADALine::AppendRoundCap(FSlateWindowElementList& OutDrawElements, int32 
 {
 	// 圆形线端：以端点为圆心的实心圆盘（直径 = 线宽），一次 MakeBox 用全圆圆角矩形笔刷绘制。
 	const float Radius = FMath::Max(Thickness.Get(), 1.0f) * 0.5f;
-	const FVector2D Center = SnapToPixel(Tip);
+	const FVector2D Center = SCADAStroke::SnapToPixel(Tip);
 	const float S = Radius * 2.0f;
 	const FGeometry CapGeom = AllottedGeometry.MakeChild(
 		FVector2f(S, S),
@@ -479,7 +460,7 @@ void SSCADALine::AppendArrow(FSlateWindowElementList& OutDrawElements, int32 Lay
 	Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(Base + Wing), FVector2f::ZeroVector, Tint));
 	Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(Base - Wing), FVector2f::ZeroVector, Tint));
 	TArray<SlateIndex> Indexes = { 0, 1, 2 };
-	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
+	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
 
 	// 箭头轮廓抗锯齿覆层（CustomVerts 三角无 AA；见 DrawContourAA 说明）
 	const TArray<FVector2D> ArrowLoop = { Tip, Base + Wing, Base - Wing, Tip };

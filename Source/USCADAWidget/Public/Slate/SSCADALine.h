@@ -3,8 +3,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Widgets/SLeafWidget.h"
 #include "SCADAWidgetTypes.h"
+#include "Widgets/SLeafWidget.h"
 
 /**
  * 底层 Slate 画线控件：绘制直线/折线（支持虚线、点线、端点箭头）。
@@ -79,8 +79,9 @@ protected:
 	void AppendArrow(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry, const FVector2D& Tip, const FVector2D& DirIn, float InSize, ESlateDrawEffect DrawEffects, const FLinearColor& InColor) const;
 	/** 画圆形线端：以端点为圆心的实心圆盘（直径 = 线宽），一次 MakeBox + 全圆圆角矩形笔刷。 */
 	void AppendRoundCap(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry, const FVector2D& Tip, ESlateDrawEffect DrawEffects, const FLinearColor& InColor) const;
-	/** 圆连接（Round Join）：把折线中间顶点替换为半径 Radius 的圆弧（二次贝塞尔采样成折线，控制点=原顶点）。
-	 *  用于消除粗线在拐点处的接缝缺口：调用方固定传 线宽/2，细线圆弧极小不可感知。
+	/** 中心线拐角圆弧替换：把折线中间顶点替换为半径 Radius 的圆弧（二次贝塞尔采样成折线，控制点=原顶点）。
+	 *  实线笔画包络路径传固定 CornerArcRadius（10px，与线宽无关，drawio rounded 语义）；
+	 *  虚线路径传 线宽/2，让划线模式沿圆角流动。
 	 *  Radius <= 0 或点数 < 3 → 原样输出；退化（共线/近掉头）顶点保持尖角。输出仍是一条完整折线。 */
 	void BuildRoundedPolyline(const TArray<FVector2D>& In, float Radius, TArray<FVector2D>& Out) const;
 	/** CustomVerts 图元（多边形填充/环带、箭头、点方块）无抗锯齿的**轮廓抗锯齿覆层**：

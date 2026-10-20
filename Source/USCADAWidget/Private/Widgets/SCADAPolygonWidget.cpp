@@ -38,6 +38,10 @@ void USCADAPolygonWidget::SynchronizeProperties()
 		MyPolygon->SetFlashColor(FlashColor);
 		MyPolygon->SetFlashInverted(bFlashInverted);
 	}
+
+	// 属性同步后补一次绑定检查：绑定先于本次同步应用（初始化时序）时在此完成注册；
+	// 无任何委托绑定（设计器实例/未绑定运行实例）时是零成本 no-op。
+	EnsurePropertyBindingTicker();
 }
 
 void USCADAPolygonWidget::ReleaseSlateResources(bool bReleaseChildren)
@@ -194,6 +198,7 @@ void USCADAPolygonWidget::SetPoints(const TArray<FVector2D>& InPoints)
 
 void USCADAPolygonWidget::SetBorderColor(FLinearColor InColor)
 {
+	BorderColorDelegate.Unbind();
 	BorderColor = InColor;
 	if (MyPolygon.IsValid())
 	{
@@ -203,6 +208,7 @@ void USCADAPolygonWidget::SetBorderColor(FLinearColor InColor)
 
 void USCADAPolygonWidget::SetThickness(float InThickness)
 {
+	ThicknessDelegate.Unbind();
 	Thickness = InThickness;
 	SnapPropertiesToPixel();
 	if (MyPolygon.IsValid())
@@ -222,6 +228,7 @@ void USCADAPolygonWidget::SetLineStyle(ESCADALineStyle InStyle)
 
 void USCADAPolygonWidget::SetFillColor(FLinearColor InColor)
 {
+	FillColorDelegate.Unbind();
 	FillColor = InColor;
 	if (MyPolygon.IsValid())
 	{
@@ -240,6 +247,7 @@ void USCADAPolygonWidget::SetFillPattern(ESCADAFillPattern InPattern)
 
 void USCADAPolygonWidget::SetFlashEnabled(bool bInEnabled)
 {
+	bFlashEnabledDelegate.Unbind();
 	bFlashEnabled = bInEnabled;
 	if (MyPolygon.IsValid())
 	{
@@ -249,6 +257,7 @@ void USCADAPolygonWidget::SetFlashEnabled(bool bInEnabled)
 
 void USCADAPolygonWidget::SetFlashColor(FLinearColor InColor)
 {
+	FlashColorDelegate.Unbind();
 	FlashColor = InColor;
 	if (MyPolygon.IsValid())
 	{
@@ -258,6 +267,7 @@ void USCADAPolygonWidget::SetFlashColor(FLinearColor InColor)
 
 void USCADAPolygonWidget::SetFlashInverted(bool bInInverted)
 {
+	bFlashInvertedDelegate.Unbind();
 	bFlashInverted = bInInverted;
 	if (MyPolygon.IsValid())
 	{
@@ -282,6 +292,153 @@ void USCADAPolygonWidget::RemovePointAtIndex(int32 Index)
 	Points.RemoveAt(Index);
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
+}
+
+// ———— UMG 属性绑定轮询（“拉”→“推”桥）————
+// 引擎语义：手动 Set* 解除绑定（各 Set* 开头的 *Delegate.Unbind()，照 UTextBlock::SetText 先例）；
+// 委托取值走每帧轮询而非引擎的一次性 Execute：绑定委托是“拉”模型、本控件数据是“推”模型，
+// 中间桥 = 下面的核心 Ticker（注册时机见 EnsurePropertyBindingTicker；设计器实例委托
+// 天然未绑定不会注册，运行时 PIE/打包正常工作，无 GIsEditor 守卫）。
+// 多边形的 Points 为数组类型不提供绑定，可绑属性均为非几何类：变化只推 Slate，不动槽。
+// 边框色在 Slate 层的接口名是 SetColor（数据层属性名是 BorderColor，对照多边形族的既有映射）。
+
+bool USCADAPolygonWidget::HasBoundPropertyDelegates() const
+{
+	return BorderColorDelegate.IsBound() || ThicknessDelegate.IsBound()
+		|| FillColorDelegate.IsBound()
+		|| bFlashEnabledDelegate.IsBound() || FlashColorDelegate.IsBound()
+		|| bFlashInvertedDelegate.IsBound();
+}
+
+void USCADAPolygonWidget::EnsurePropertyBindingTicker()
+{
+	if (PropertyBindingTickerHandle.IsValid() || !HasBoundPropertyDelegates())
+	{
+		return;
+	}
+	TWeakObjectPtr<USCADAPolygonWidget> WeakThis(this);
+	PropertyBindingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
+	{
+		if (WeakThis.IsValid())
+		{
+			WeakThis->PollPropertyBindings();
+			return true;
+		}
+		return false;
+	}));
+}
+
+void USCADAPolygonWidget::RemovePropertyBindingTicker()
+{
+	if (PropertyBindingTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(PropertyBindingTickerHandle);
+		PropertyBindingTickerHandle.Reset();
+	}
+}
+
+void USCADAPolygonWidget::PollPropertyBindings()
+{
+	// 运行中委托全部解除（蓝图 Set* / 外部手动 Unbind 等）→ 自注销，
+	// 等下一次绑定经 OnBindingChanged/SynchronizeProperties 路径重新注册。
+	if (!HasBoundPropertyDelegates())
+	{
+		RemovePropertyBindingTicker();
+		return;
+	}
+
+	// 非几何属性：变化才写成员并推对应 Slate Set（与 SynchronizeProperties 的单属性子集一致，
+	// 但绝不调公开 Set*——那会 Unbind）。float 先按数据层规则取整/钳制再比较
+	// （本族边框宽度允许 0：下限 0，与各控件 SnapPropertiesToPixel 规则一致）。
+	if (ThicknessDelegate.IsBound())
+	{
+		const float NewValue = FMath::Max(FMath::RoundToFloat(ThicknessDelegate.Execute()), 0.0f);
+		if (!FMath::IsNearlyEqual(NewValue, Thickness))
+		{
+			Thickness = NewValue;
+			if (MyPolygon.IsValid())
+			{
+				MyPolygon->SetThickness(Thickness);
+			}
+		}
+	}
+	if (BorderColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = BorderColorDelegate.Execute();
+		if (NewValue != BorderColor)
+		{
+			BorderColor = NewValue;
+			if (MyPolygon.IsValid())
+			{
+				MyPolygon->SetColor(BorderColor);
+			}
+		}
+	}
+	if (FillColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = FillColorDelegate.Execute();
+		if (NewValue != FillColor)
+		{
+			FillColor = NewValue;
+			if (MyPolygon.IsValid())
+			{
+				MyPolygon->SetFillColor(FillColor);
+			}
+		}
+	}
+	if (bFlashEnabledDelegate.IsBound())
+	{
+		const bool bNewValue = bFlashEnabledDelegate.Execute();
+		if (bNewValue != bFlashEnabled)
+		{
+			bFlashEnabled = bNewValue;
+			if (MyPolygon.IsValid())
+			{
+				MyPolygon->SetFlashEnabled(bFlashEnabled);
+			}
+		}
+	}
+	if (FlashColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = FlashColorDelegate.Execute();
+		if (NewValue != FlashColor)
+		{
+			FlashColor = NewValue;
+			if (MyPolygon.IsValid())
+			{
+				MyPolygon->SetFlashColor(FlashColor);
+			}
+		}
+	}
+	if (bFlashInvertedDelegate.IsBound())
+	{
+		const bool bNewValue = bFlashInvertedDelegate.Execute();
+		if (bNewValue != bFlashInverted)
+		{
+			bFlashInverted = bNewValue;
+			if (MyPolygon.IsValid())
+			{
+				MyPolygon->SetFlashInverted(bFlashInverted);
+			}
+		}
+	}
+}
+
+void USCADAPolygonWidget::OnBindingChanged(const FName& Property)
+{
+	Super::OnBindingChanged(Property);
+
+	// 绑定生效通道：UWidget::AddBinding 成功（原生 binder/属性路径）后引擎回调此处。
+	// “Create Binding”（绑定到 BP 生成函数）路径不回调此处，由其后的 SynchronizeProperties
+	// 或已注册 Ticker 覆盖；此处按 IsBound 判定，未绑定即零成本 no-op。
+	EnsurePropertyBindingTicker();
+}
+
+void USCADAPolygonWidget::BeginDestroy()
+{
+	// 绑定轮询 Ticker 兜底注销（正常路径：weak 失效时 Ticker 自清理）
+	RemovePropertyBindingTicker();
+	Super::BeginDestroy();
 }
 
 #if WITH_EDITOR

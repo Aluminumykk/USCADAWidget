@@ -38,6 +38,10 @@ void USCADARectangleWidget::SynchronizeProperties()
 		MyRectangle->SetFlashColor(FlashColor);
 		MyRectangle->SetFlashInverted(bFlashInverted);
 	}
+
+	// 属性同步后补一次绑定检查：绑定先于本次同步应用（初始化时序）时在此完成注册；
+	// 无任何委托绑定（设计器实例/未绑定运行实例）时是零成本 no-op。
+	EnsurePropertyBindingTicker();
 }
 
 void USCADARectangleWidget::ReleaseSlateResources(bool bReleaseChildren)
@@ -116,6 +120,7 @@ void USCADARectangleWidget::MapSlotToGeometry(UCanvasPanelSlot* CanvasSlot, cons
 
 void USCADARectangleWidget::SetPosition(FVector2D InPosition)
 {
+	PositionDelegate.Unbind();
 	Position = InPosition;
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
@@ -123,6 +128,7 @@ void USCADARectangleWidget::SetPosition(FVector2D InPosition)
 
 void USCADARectangleWidget::SetSize(FVector2D InSize)
 {
+	SizeDelegate.Unbind();
 	Size = InSize;
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
@@ -130,6 +136,7 @@ void USCADARectangleWidget::SetSize(FVector2D InSize)
 
 void USCADARectangleWidget::SetCornerRadiusX(float InRadiusX)
 {
+	CornerRadiusXDelegate.Unbind();
 	CornerRadiusX = InRadiusX;
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
@@ -137,6 +144,7 @@ void USCADARectangleWidget::SetCornerRadiusX(float InRadiusX)
 
 void USCADARectangleWidget::SetCornerRadiusY(float InRadiusY)
 {
+	CornerRadiusYDelegate.Unbind();
 	CornerRadiusY = InRadiusY;
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
@@ -144,6 +152,7 @@ void USCADARectangleWidget::SetCornerRadiusY(float InRadiusY)
 
 void USCADARectangleWidget::SetBorderColor(FLinearColor InColor)
 {
+	BorderColorDelegate.Unbind();
 	BorderColor = InColor;
 	if (MyRectangle.IsValid())
 	{
@@ -153,6 +162,7 @@ void USCADARectangleWidget::SetBorderColor(FLinearColor InColor)
 
 void USCADARectangleWidget::SetThickness(float InThickness)
 {
+	ThicknessDelegate.Unbind();
 	Thickness = InThickness;
 	SnapPropertiesToPixel();
 	if (MyRectangle.IsValid())
@@ -172,6 +182,7 @@ void USCADARectangleWidget::SetLineStyle(ESCADALineStyle InStyle)
 
 void USCADARectangleWidget::SetFillColor(FLinearColor InColor)
 {
+	FillColorDelegate.Unbind();
 	FillColor = InColor;
 	if (MyRectangle.IsValid())
 	{
@@ -190,6 +201,7 @@ void USCADARectangleWidget::SetFillPattern(ESCADAFillPattern InPattern)
 
 void USCADARectangleWidget::SetFlashEnabled(bool bInEnabled)
 {
+	bFlashEnabledDelegate.Unbind();
 	bFlashEnabled = bInEnabled;
 	if (MyRectangle.IsValid())
 	{
@@ -199,6 +211,7 @@ void USCADARectangleWidget::SetFlashEnabled(bool bInEnabled)
 
 void USCADARectangleWidget::SetFlashColor(FLinearColor InColor)
 {
+	FlashColorDelegate.Unbind();
 	FlashColor = InColor;
 	if (MyRectangle.IsValid())
 	{
@@ -208,11 +221,208 @@ void USCADARectangleWidget::SetFlashColor(FLinearColor InColor)
 
 void USCADARectangleWidget::SetFlashInverted(bool bInInverted)
 {
+	bFlashInvertedDelegate.Unbind();
 	bFlashInverted = bInInverted;
 	if (MyRectangle.IsValid())
 	{
 		MyRectangle->SetFlashInverted(bFlashInverted);
 	}
+}
+
+// ———— UMG 属性绑定轮询（“拉”→“推”桥）————
+// 引擎语义：手动 Set* 解除绑定（各 Set* 开头的 *Delegate.Unbind()，照 UTextBlock::SetText 先例）；
+// 委托取值走每帧轮询而非引擎的一次性 Execute：绑定委托是“拉”模型、本控件数据是“推”模型，
+// 中间桥 = 下面的核心 Ticker（注册时机见 EnsurePropertyBindingTicker；设计器实例委托
+// 天然未绑定不会注册，运行时 PIE/打包正常工作，无 GIsEditor 守卫）。
+// 边框色在 Slate 层的接口名是 SetColor（数据层属性名是 BorderColor，对照多边形族的既有映射）。
+
+bool USCADARectangleWidget::HasBoundPropertyDelegates() const
+{
+	return PositionDelegate.IsBound() || SizeDelegate.IsBound()
+		|| CornerRadiusXDelegate.IsBound() || CornerRadiusYDelegate.IsBound()
+		|| BorderColorDelegate.IsBound() || ThicknessDelegate.IsBound()
+		|| FillColorDelegate.IsBound()
+		|| bFlashEnabledDelegate.IsBound() || FlashColorDelegate.IsBound()
+		|| bFlashInvertedDelegate.IsBound();
+}
+
+void USCADARectangleWidget::EnsurePropertyBindingTicker()
+{
+	if (PropertyBindingTickerHandle.IsValid() || !HasBoundPropertyDelegates())
+	{
+		return;
+	}
+	TWeakObjectPtr<USCADARectangleWidget> WeakThis(this);
+	PropertyBindingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
+	{
+		if (WeakThis.IsValid())
+		{
+			WeakThis->PollPropertyBindings();
+			return true;
+		}
+		return false;
+	}));
+}
+
+void USCADARectangleWidget::RemovePropertyBindingTicker()
+{
+	if (PropertyBindingTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(PropertyBindingTickerHandle);
+		PropertyBindingTickerHandle.Reset();
+	}
+}
+
+void USCADARectangleWidget::PollPropertyBindings()
+{
+	// 运行中委托全部解除（蓝图 Set* / 外部手动 Unbind 等）→ 自注销，
+	// 等下一次绑定经 OnBindingChanged/SynchronizeProperties 路径重新注册。
+	if (!HasBoundPropertyDelegates())
+	{
+		RemovePropertyBindingTicker();
+		return;
+	}
+
+	// 几何族（Position/Size/CornerRadiusX/CornerRadiusY）：写成员后统一走数据层取整/钳制
+	// （尺寸 ≥1、圆角 [0, min(宽,高)/2] 依赖尺寸，由 SnapPropertiesToPixel 统一处理）
+	// + 槽正向对齐（SyncSlotFromGeometry 末尾含 PushGeometryToSlate；与 Set* 接口同一
+	// 数据流向，但绝不调 Set*——那会 Unbind）。
+	bool bGeometryDirty = false;
+	if (PositionDelegate.IsBound())
+	{
+		const FVector2D NewValue = PositionDelegate.Execute();
+		if (!NewValue.Equals(Position))
+		{
+			Position = NewValue;
+			bGeometryDirty = true;
+		}
+	}
+	if (SizeDelegate.IsBound())
+	{
+		const FVector2D NewValue = SizeDelegate.Execute();
+		if (!NewValue.Equals(Size))
+		{
+			Size = NewValue;
+			bGeometryDirty = true;
+		}
+	}
+	if (CornerRadiusXDelegate.IsBound())
+	{
+		const float NewValue = CornerRadiusXDelegate.Execute();
+		if (!FMath::IsNearlyEqual(NewValue, CornerRadiusX))
+		{
+			CornerRadiusX = NewValue;
+			bGeometryDirty = true;
+		}
+	}
+	if (CornerRadiusYDelegate.IsBound())
+	{
+		const float NewValue = CornerRadiusYDelegate.Execute();
+		if (!FMath::IsNearlyEqual(NewValue, CornerRadiusY))
+		{
+			CornerRadiusY = NewValue;
+			bGeometryDirty = true;
+		}
+	}
+	if (bGeometryDirty)
+	{
+		// 含 Thickness 的取整（幂等）；随后正向对齐：矩形 → 槽 → Slate
+		SnapPropertiesToPixel();
+		SyncSlotFromGeometry();
+	}
+
+	// 非几何属性：变化才写成员并推对应 Slate Set（与 SynchronizeProperties 的单属性子集一致）。
+	// float 先按数据层规则取整/钳制再比较（边框宽度允许 0：下限 0，与本控件
+	// SnapPropertiesToPixel 规则一致）。
+	if (ThicknessDelegate.IsBound())
+	{
+		const float NewValue = FMath::Max(FMath::RoundToFloat(ThicknessDelegate.Execute()), 0.0f);
+		if (!FMath::IsNearlyEqual(NewValue, Thickness))
+		{
+			Thickness = NewValue;
+			if (MyRectangle.IsValid())
+			{
+				MyRectangle->SetThickness(Thickness);
+			}
+		}
+	}
+	if (BorderColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = BorderColorDelegate.Execute();
+		if (NewValue != BorderColor)
+		{
+			BorderColor = NewValue;
+			if (MyRectangle.IsValid())
+			{
+				MyRectangle->SetColor(BorderColor);
+			}
+		}
+	}
+	if (FillColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = FillColorDelegate.Execute();
+		if (NewValue != FillColor)
+		{
+			FillColor = NewValue;
+			if (MyRectangle.IsValid())
+			{
+				MyRectangle->SetFillColor(FillColor);
+			}
+		}
+	}
+	if (bFlashEnabledDelegate.IsBound())
+	{
+		const bool bNewValue = bFlashEnabledDelegate.Execute();
+		if (bNewValue != bFlashEnabled)
+		{
+			bFlashEnabled = bNewValue;
+			if (MyRectangle.IsValid())
+			{
+				MyRectangle->SetFlashEnabled(bFlashEnabled);
+			}
+		}
+	}
+	if (FlashColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = FlashColorDelegate.Execute();
+		if (NewValue != FlashColor)
+		{
+			FlashColor = NewValue;
+			if (MyRectangle.IsValid())
+			{
+				MyRectangle->SetFlashColor(FlashColor);
+			}
+		}
+	}
+	if (bFlashInvertedDelegate.IsBound())
+	{
+		const bool bNewValue = bFlashInvertedDelegate.Execute();
+		if (bNewValue != bFlashInverted)
+		{
+			bFlashInverted = bNewValue;
+			if (MyRectangle.IsValid())
+			{
+				MyRectangle->SetFlashInverted(bFlashInverted);
+			}
+		}
+	}
+}
+
+void USCADARectangleWidget::OnBindingChanged(const FName& Property)
+{
+	Super::OnBindingChanged(Property);
+
+	// 绑定生效通道：UWidget::AddBinding 成功（原生 binder/属性路径）后引擎回调此处。
+	// “Create Binding”（绑定到 BP 生成函数）路径不回调此处，由其后的 SynchronizeProperties
+	// 或已注册 Ticker 覆盖；此处按 IsBound 判定，未绑定即零成本 no-op。
+	EnsurePropertyBindingTicker();
+}
+
+void USCADARectangleWidget::BeginDestroy()
+{
+	// 绑定轮询 Ticker 兜底注销（正常路径：weak 失效时 Ticker 自清理）
+	RemovePropertyBindingTicker();
+	Super::BeginDestroy();
 }
 
 #if WITH_EDITOR

@@ -40,6 +40,10 @@ void USCADALineWidget::SynchronizeProperties()
 		MyLine->SetFlashColor(FlashColor);
 		MyLine->SetFlashInverted(bFlashInverted);
 	}
+
+	// 属性同步后补一次绑定检查：绑定先于本次同步应用（初始化时序）时在此完成注册；
+	// 无任何委托绑定（设计器实例/未绑定运行实例）时是零成本 no-op。
+	EnsurePropertyBindingTicker();
 }
 
 void USCADALineWidget::ReleaseSlateResources(bool bReleaseChildren)
@@ -270,6 +274,7 @@ void USCADALineWidget::WriteBackBoundsSlot(UCanvasPanelSlot* CanvasSlot)
 
 void USCADALineWidget::SetStartPoint(FVector2D InPoint)
 {
+	StartPointDelegate.Unbind();
 	StartPoint = InPoint;
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
@@ -277,6 +282,7 @@ void USCADALineWidget::SetStartPoint(FVector2D InPoint)
 
 void USCADALineWidget::SetEndPoint(FVector2D InPoint)
 {
+	EndPointDelegate.Unbind();
 	EndPoint = InPoint;
 	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
@@ -284,6 +290,7 @@ void USCADALineWidget::SetEndPoint(FVector2D InPoint)
 
 void USCADALineWidget::SetColor(FLinearColor InColor)
 {
+	ColorDelegate.Unbind();
 	Color = InColor;
 	if (MyLine.IsValid())
 	{
@@ -293,6 +300,7 @@ void USCADALineWidget::SetColor(FLinearColor InColor)
 
 void USCADALineWidget::SetThickness(float InThickness)
 {
+	ThicknessDelegate.Unbind();
 	Thickness = InThickness;
 	SnapPropertiesToPixel();
 	if (MyLine.IsValid())
@@ -339,6 +347,7 @@ void USCADALineWidget::SetLineCap(ESCADALineCap InCap)
 
 void USCADALineWidget::SetFlashEnabled(bool bInEnabled)
 {
+	bFlashEnabledDelegate.Unbind();
 	bFlashEnabled = bInEnabled;
 	if (MyLine.IsValid())
 	{
@@ -348,6 +357,7 @@ void USCADALineWidget::SetFlashEnabled(bool bInEnabled)
 
 void USCADALineWidget::SetFlashColor(FLinearColor InColor)
 {
+	FlashColorDelegate.Unbind();
 	FlashColor = InColor;
 	if (MyLine.IsValid())
 	{
@@ -357,11 +367,172 @@ void USCADALineWidget::SetFlashColor(FLinearColor InColor)
 
 void USCADALineWidget::SetFlashInverted(bool bInInverted)
 {
+	bFlashInvertedDelegate.Unbind();
 	bFlashInverted = bInInverted;
 	if (MyLine.IsValid())
 	{
 		MyLine->SetFlashInverted(bFlashInverted);
 	}
+}
+
+// ———— UMG 属性绑定轮询（“拉”→“推”桥）————
+// 引擎语义：手动 Set* 解除绑定（各 Set* 开头的 *Delegate.Unbind()，照 UTextBlock::SetText 先例）；
+// 委托取值走每帧轮询而非引擎的一次性 Execute：绑定委托是“拉”模型、本控件数据是“推”模型，
+// 中间桥 = 下面的核心 Ticker（注册时机见 EnsurePropertyBindingTicker；设计器实例委托
+// 天然未绑定不会注册，运行时 PIE/打包正常工作，无 GIsEditor 守卫）。
+
+bool USCADALineWidget::HasBoundPropertyDelegates() const
+{
+	return StartPointDelegate.IsBound() || EndPointDelegate.IsBound()
+		|| ColorDelegate.IsBound() || ThicknessDelegate.IsBound()
+		|| bFlashEnabledDelegate.IsBound() || FlashColorDelegate.IsBound()
+		|| bFlashInvertedDelegate.IsBound();
+}
+
+void USCADALineWidget::EnsurePropertyBindingTicker()
+{
+	if (PropertyBindingTickerHandle.IsValid() || !HasBoundPropertyDelegates())
+	{
+		return;
+	}
+	TWeakObjectPtr<USCADALineWidget> WeakThis(this);
+	PropertyBindingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
+	{
+		if (WeakThis.IsValid())
+		{
+			WeakThis->PollPropertyBindings();
+			return true;
+		}
+		return false;
+	}));
+}
+
+void USCADALineWidget::RemovePropertyBindingTicker()
+{
+	if (PropertyBindingTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(PropertyBindingTickerHandle);
+		PropertyBindingTickerHandle.Reset();
+	}
+}
+
+void USCADALineWidget::PollPropertyBindings()
+{
+	// 运行中委托全部解除（蓝图 Set* / 外部手动 Unbind 等）→ 自注销，
+	// 等下一次绑定经 OnBindingChanged/SynchronizeProperties 路径重新注册。
+	if (!HasBoundPropertyDelegates())
+	{
+		RemovePropertyBindingTicker();
+		return;
+	}
+
+	// 几何族（StartPoint/EndPoint）：写成员后统一走数据层取整 + 槽正向对齐
+	//（SyncSlotFromGeometry 末尾含 PushGeometryToSlate；与 Set* 接口同一数据流向，
+	// 但绝不调 Set*——那会 Unbind）。
+	bool bGeometryDirty = false;
+	if (StartPointDelegate.IsBound())
+	{
+		const FVector2D NewValue = StartPointDelegate.Execute();
+		if (!NewValue.Equals(StartPoint))
+		{
+			StartPoint = NewValue;
+			bGeometryDirty = true;
+		}
+	}
+	if (EndPointDelegate.IsBound())
+	{
+		const FVector2D NewValue = EndPointDelegate.Execute();
+		if (!NewValue.Equals(EndPoint))
+		{
+			EndPoint = NewValue;
+			bGeometryDirty = true;
+		}
+	}
+	if (bGeometryDirty)
+	{
+		// 含 Thickness 的取整（幂等）；随后正向对齐：包围盒 → 槽 → Slate
+		SnapPropertiesToPixel();
+		SyncSlotFromGeometry();
+	}
+
+	// 非几何属性：变化才写成员并推对应 Slate Set（与 SynchronizeProperties 的单属性子集一致）
+	if (ThicknessDelegate.IsBound())
+	{
+		const float NewValue = FMath::Max(FMath::RoundToFloat(ThicknessDelegate.Execute()), 1.0f);
+		if (!FMath::IsNearlyEqual(NewValue, Thickness))
+		{
+			Thickness = NewValue;
+			if (MyLine.IsValid())
+			{
+				MyLine->SetThickness(Thickness);
+			}
+		}
+	}
+	if (ColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = ColorDelegate.Execute();
+		if (NewValue != Color)
+		{
+			Color = NewValue;
+			if (MyLine.IsValid())
+			{
+				MyLine->SetColor(Color);
+			}
+		}
+	}
+	if (bFlashEnabledDelegate.IsBound())
+	{
+		const bool bNewValue = bFlashEnabledDelegate.Execute();
+		if (bNewValue != bFlashEnabled)
+		{
+			bFlashEnabled = bNewValue;
+			if (MyLine.IsValid())
+			{
+				MyLine->SetFlashEnabled(bFlashEnabled);
+			}
+		}
+	}
+	if (FlashColorDelegate.IsBound())
+	{
+		const FLinearColor NewValue = FlashColorDelegate.Execute();
+		if (NewValue != FlashColor)
+		{
+			FlashColor = NewValue;
+			if (MyLine.IsValid())
+			{
+				MyLine->SetFlashColor(FlashColor);
+			}
+		}
+	}
+	if (bFlashInvertedDelegate.IsBound())
+	{
+		const bool bNewValue = bFlashInvertedDelegate.Execute();
+		if (bNewValue != bFlashInverted)
+		{
+			bFlashInverted = bNewValue;
+			if (MyLine.IsValid())
+			{
+				MyLine->SetFlashInverted(bFlashInverted);
+			}
+		}
+	}
+}
+
+void USCADALineWidget::OnBindingChanged(const FName& Property)
+{
+	Super::OnBindingChanged(Property);
+
+	// 绑定生效通道：UWidget::AddBinding 成功（原生 binder/属性路径）后引擎回调此处。
+	// “Create Binding”（绑定到 BP 生成函数）路径不回调此处，由其后的 SynchronizeProperties
+	// 或已注册 Ticker 覆盖；此处按 IsBound 判定，未绑定即零成本 no-op。
+	EnsurePropertyBindingTicker();
+}
+
+void USCADALineWidget::BeginDestroy()
+{
+	// 绑定轮询 Ticker 兜底注销（正常路径：weak 失效时 Ticker 自清理）
+	RemovePropertyBindingTicker();
+	Super::BeginDestroy();
 }
 
 #if WITH_EDITOR

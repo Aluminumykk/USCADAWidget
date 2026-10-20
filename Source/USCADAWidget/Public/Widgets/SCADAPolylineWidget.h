@@ -3,7 +3,9 @@
 #pragma once
 
 #include "SCADAWidgetTypes.h"
+#include "Binding/SCADABindingTypes.h"
 #include "Widgets/SCADAPrimitiveWidgetBase.h"
+#include "Containers/Ticker.h"
 #include "SCADAPolylineWidget.generated.h"
 
 class SSCADALine;
@@ -17,6 +19,12 @@ class SSCADALine;
  * 修改点位 → 槽矩形自动更新；在设计器中拖动/拉伸控件 → 点位坐标自动平移/缩放。
  * 输入时坐标/线宽取整到整数像素。
  * 槽同步状态机骨架在基类 USCADAPrimitiveWidgetBase，本类只留映射核心（增量缩放+翻转沿镜像）。
+ *
+ * UMG 属性绑定（细节面板 Bind 下拉）：可绑定属性旁各有隐藏的伴随委托属性
+ * （命名 = 属性 C++ 名 + "Delegate"，UMGEditor FindDelegateProperty 的硬条件）；
+ * 委托是“拉”模型而本控件走“推”模型，运行时由属性绑定轮询 Ticker 每帧 Execute()
+ * 取值、按数据层规则取整后推送（见 PollPropertyBindings）。手动调用 Set* 会解除绑定。
+ * Points 为数组类型，本轮不提供绑定（引擎无 TArray binder）。
  */
 UCLASS(meta = (DisplayName = "SCADA Polyline", Category = "SCADA"))
 class USCADAWIDGET_API USCADAPolylineWidget : public USCADAPrimitiveWidgetBase
@@ -35,8 +43,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline")
 	FLinearColor Color = FLinearColor::White;
 
+	/** Bind 伴随委托：使本属性出现在 UMG 设计器 Bind 下拉中（命名必须 = 属性名+Delegate） */
+	UPROPERTY()
+	FGetSCADALinearColor ColorDelegate;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline", meta = (ClampMin = "1.0"))
 	float Thickness = 2.0f;
+
+	/** Bind 伴随委托：使本属性出现在 UMG 设计器 Bind 下拉中（命名必须 = 属性名+Delegate） */
+	UPROPERTY()
+	FGetSCADAFloat ThicknessDelegate;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline")
 	ESCADALineStyle LineStyle = ESCADALineStyle::Solid;
@@ -58,14 +74,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash")
 	bool bFlashEnabled = false;
 
+	/** Bind 伴随委托：使本属性出现在 UMG 设计器 Bind 下拉中（命名必须 = 属性名+Delegate，bool 含 b 前缀） */
+	UPROPERTY()
+	FGetSCADABool bFlashEnabledDelegate;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash", meta = (EditCondition = "bFlashEnabled"))
 	FLinearColor FlashColor = FLinearColor::Red;
+
+	/** Bind 伴随委托：使本属性出现在 UMG 设计器 Bind 下拉中（命名必须 = 属性名+Delegate） */
+	UPROPERTY()
+	FGetSCADALinearColor FlashColorDelegate;
 
 	/** 相位翻转（翻转组）：开启后与全局定时器取色相反——正常相位显示闪烁色、
 	 *  闪烁相位显示正常色。两组图元由同一时刻换相、显示色互反（一组亮时另一组灭），
 	 *  用于状态互闪。本控件默认属于翻转组。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Flash", meta = (EditCondition = "bFlashEnabled"))
 	bool bFlashInverted = true;
+
+	/** Bind 伴随委托：使本属性出现在 UMG 设计器 Bind 下拉中（命名必须 = 属性名+Delegate，bool 含 b 前缀） */
+	UPROPERTY()
+	FGetSCADABool bFlashInvertedDelegate;
 
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Polyline")
 	void SetPoints(const TArray<FVector2D>& InPoints);
@@ -105,10 +133,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Polyline")
 	void RemovePointAtIndex(int32 Index);
 
+	virtual void BeginDestroy() override;
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void SynchronizeProperties() override;
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
+
+	/** 绑定生效/变更（引擎在 AddBinding 成功后回调，仅 Slate 已创建时）：按需注册属性绑定轮询 Ticker */
+	virtual void OnBindingChanged(const FName& Property) override;
 
 #if WITH_EDITOR
 	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
@@ -141,6 +174,27 @@ protected:
 
 	/** 正向对齐完成：此刻数据包围盒 == 槽缓存，记录已验证版本 */
 	virtual void OnSlotAlignedToGeometry() override;
+
+private:
+	// —— UMG 属性绑定轮询（“拉”→“推”桥）——
+	// 委托绑定后引擎只在绑定生效时执行一次取值（或根本不执行），本控件走每帧轮询：
+	// 任一伴随委托 IsBound 即注册核心 Ticker，每帧 Execute() → 数据层取整/钳制 →
+	// 与成员现值比较，不同才写成员并推送（不调公开 Set*——那会 Unbind）。
+	// 设计器实例委托天然未绑定，不会注册；BeginDestroy 兜底注销。
+
+	/** 是否有任一 Bind 伴随委托处于绑定状态（Ticker 注册/自注销的判定） */
+	bool HasBoundPropertyDelegates() const;
+
+	/** 按需注册属性绑定轮询 Ticker（幂等；无任何委托绑定时直接返回） */
+	void EnsurePropertyBindingTicker();
+
+	/** 注销属性绑定轮询 Ticker（幂等） */
+	void RemovePropertyBindingTicker();
+
+	/** 每帧轮询：Execute() 各已绑委托 → 数据层规则取整 → 变化才写成员并推送 Slate */
+	void PollPropertyBindings();
+
+	FTSTicker::FDelegateHandle PropertyBindingTickerHandle;
 
 private:
 	/** PushGeometryToSlate 的复用缓冲：每次推送 Reset() 后填充，避免设计器拖动中每帧一次的新数组分配。

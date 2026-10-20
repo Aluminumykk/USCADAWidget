@@ -46,7 +46,8 @@ namespace SCADAStroke
 	/**
 	 * 耳切三角化（Ear Clipping）：把可能凹的简单多边形（顶点按序，顺/逆时针均可）
 	 * 拆成三角形索引组。相邻重复点自动去除；失败（共线退化/自交/无耳朵）返回 false，
-	 * 调用方静默跳过填充。O(n^3)，SCADA 图元顶点量级下足够。
+	 * 调用方静默跳过填充。续扫实现（移除耳朵后从前一位置继续，不整圈重启），
+	 * 最坏 O(n^3)（逐点包含判定），SCADA 图元顶点量级下足够。
 	 */
 	inline bool TriangulateEarClipping(const TArray<FVector2D>& Vertices, TArray<int32>& OutTriangles)
 	{
@@ -113,48 +114,57 @@ namespace SCADAStroke
 			return (c1 * Sign) >= 0.0 && (c2 * Sign) >= 0.0 && (c3 * Sign) >= 0.0;
 		};
 
-		// 迭代找耳朵：凸（叉积符号=多边形方向）且三角形内无其他顶点 → 输出并移除
+		// 迭代找耳朵（续扫，经典耳切优化）：凸（叉积符号=多边形方向）且三角形内无其他顶点 →
+		// 输出并移除。RemoveAt(i) 只改变 i-1、i 两处的邻接关系，因此下次从被移除位置的前一个
+		// 下标继续检查（新 i 处即原 i+1，与 i-1 一起重检），不整圈重启；其余顶点本轮仍会被扫到
+		//（它们的耳朵性只会因某次移除由假变真，延迟到扫回时检出，不会漏判）。连续检查满一圈
+		//（NoEarCount 达到当前存活数）才判定无耳朵失败，终止性由计数器保证。
 		TArray<int32> LiveIdx = Live;
+		int32 ScanIdx = 0;
+		int32 NoEarCount = 0;
 		while (LiveIdx.Num() > 3)
 		{
 			const int32 mNow = LiveIdx.Num();
-			bool bFoundEar = false;
-			for (int32 i = 0; i < mNow && !bFoundEar; ++i)
+			const int32 i = ScanIdx;
+			const int32 iPrev = (i - 1 + mNow) % mNow;
+			const int32 iNext = (i + 1) % mNow;
+			const int32 ia = LiveIdx[iPrev];
+			const int32 ib = LiveIdx[i];
+			const int32 ic = LiveIdx[iNext];
+
+			bool bIsEar = CrossOf(ia, ib, ic) * Sign > 0.0;
+			if (bIsEar)
 			{
-				const int32 ia = LiveIdx[(i - 1 + mNow) % mNow];
-				const int32 ib = LiveIdx[i];
-				const int32 ic = LiveIdx[(i + 1) % mNow];
-
-				if (CrossOf(ia, ib, ic) * Sign <= 0.0)
+				for (int32 j = 0; j < mNow && bIsEar; ++j)
 				{
-					continue;
-				}
-
-				bool bClear = true;
-				for (int32 j = 0; j < mNow && bClear; ++j)
-				{
-					if (j == i || j == (i - 1 + mNow) % mNow || j == (i + 1) % mNow)
+					if (j == i || j == iPrev || j == iNext)
 					{
 						continue;
 					}
 					if (PointInTri(LiveIdx[j], ia, ib, ic))
 					{
-						bClear = false;
+						bIsEar = false;
 					}
 				}
-
-				if (bClear)
-				{
-					OutTriangles.Add(ia);
-					OutTriangles.Add(ib);
-					OutTriangles.Add(ic);
-					LiveIdx.RemoveAt(i);
-					bFoundEar = true;
-				}
 			}
-			if (!bFoundEar)
+
+			if (bIsEar)
 			{
-				return false; // 无可用耳朵（自交/严重退化）——静默失败
+				OutTriangles.Add(ia);
+				OutTriangles.Add(ib);
+				OutTriangles.Add(ic);
+				LiveIdx.RemoveAt(i);
+				// 从被移除位置的前一个下标继续（环形取模；Num 变 3 时取模仍合法，循环随即退出）
+				ScanIdx = (i - 1 + LiveIdx.Num()) % LiveIdx.Num();
+				NoEarCount = 0;
+			}
+			else
+			{
+				ScanIdx = (i + 1) % mNow;
+				if (++NoEarCount >= mNow)
+				{
+					return false; // 扫完一圈无可用耳朵（自交/严重退化）——静默失败
+				}
 			}
 		}
 

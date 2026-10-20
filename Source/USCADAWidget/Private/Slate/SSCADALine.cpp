@@ -137,10 +137,16 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 
 	// 注意：MakeLines 会把传入的所有点连成一条折线（A,B,C → A-B-C）。
 	// 画不相连的独立线段必须每两个点调用一次 MakeLines。
+	// 复用缓冲（MakeLines/DrawContourAA 只接受 const TArray&，无 TArrayView 重载）：
+	// Reset(N) 首段分配一次、后续只覆写元素，消除逐段 initializer-list 堆分配。
+	TArray<FVector2D> SegPair;
+	TArray<FVector2D> DotLoopBuf;
 	auto DrawSegment = [&](const FVector2D& A, const FVector2D& B, float SegThickness)
 	{
-		TArray<FVector2D> Pair = { A, B };
-		FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, Pair, DrawEffects, FinalColor, /*bAntialias=*/true, SegThickness);
+		SegPair.Reset(2);
+		SegPair.Add(A);
+		SegPair.Add(B);
+		FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, SegPair, DrawEffects, FinalColor, /*bAntialias=*/true, SegThickness);
 	};
 
 	// 点样式的点：严格 1:1 的实心方块（边长 = 线宽），沿线段方向旋转
@@ -166,11 +172,14 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 		{
 			return FVector2D(Center.X + X * CosA - Y * SinA, Center.Y + X * SinA + Y * CosA);
 		};
-		const TArray<FVector2D> DotLoop =
-		{
-			RotCorner(-DotH, -DotH), RotCorner(DotH, -DotH), RotCorner(DotH, DotH), RotCorner(-DotH, DotH), RotCorner(-DotH, -DotH)
-		};
-		DrawContourAA(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(), DotLoop, FinalColor, DrawEffects);
+		DotLoopBuf.Reset(5);
+		DotLoopBuf.Add(RotCorner(-DotH, -DotH));
+		DotLoopBuf.Add(RotCorner(DotH, -DotH));
+		DotLoopBuf.Add(RotCorner(DotH, DotH));
+		DotLoopBuf.Add(RotCorner(-DotH, DotH));
+		const FVector2D DotLoopFirst = DotLoopBuf[0]; // 先拷贝再 Add，避免自引用触发 TArray 检查
+		DotLoopBuf.Add(DotLoopFirst);
+		DrawContourAA(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(), DotLoopBuf, FinalColor, DrawEffects);
 	};
 
 	// 箭头尺寸随线宽自适应：长度至少为 4 倍线宽，半宽为长度的一半。
@@ -285,30 +294,38 @@ void SSCADALine::BuildSegmentPoints(const TArray<FVector2D>& Polyline, TArray<FV
 	OutSegments.Reset();
 	OutIsDot.Reset();
 
-	// 线型 → 交替的“画/空”长度模式（点 = 线宽长度）；PatternDot 标记该位是否为“点”
+	// 线型 → 交替的“画/空”长度模式（点 = 线宽长度）；PatternDot 标记该位是否为“点”。
+	// 长度值依赖运行时 Dash/Gap/Dot，填入栈缓冲（最多 6 槽，零堆分配）；
+	// 点/划标记每样式固定，用 static const 表（Slate 绘制单线程，函数内 static const 初始化自 C++11 起线程安全）。
 	const float Dot = FMath::Max(Thickness.Get(), 1.0f);
 	const float Dash = DashLength;
 	const float Gap = GapLength;
 
-	TArray<float> Pattern;
-	TArray<bool> PatternDot;
+	static const bool DotFlagsDashed[]     = { false, false };
+	static const bool DotFlagsDotted[]     = { true,  false };
+	static const bool DotFlagsDashDot[]    = { false, false, true,  false };
+	static const bool DotFlagsDashDotDot[] = { false, false, true,  false, true, false };
+
+	float Pattern[6];
+	const bool* PatternDot = nullptr;
+	int32 PatternNum = 0;
 	switch (LineStyle.Get())
 	{
 	case ESCADALineStyle::Dashed:
-		Pattern = { Dash, Gap };
-		PatternDot = { false, false };
+		Pattern[0] = Dash; Pattern[1] = Gap;
+		PatternDot = DotFlagsDashed; PatternNum = 2;
 		break;
 	case ESCADALineStyle::Dotted:
-		Pattern = { Dot, Gap };
-		PatternDot = { true, false };
+		Pattern[0] = Dot; Pattern[1] = Gap;
+		PatternDot = DotFlagsDotted; PatternNum = 2;
 		break;
 	case ESCADALineStyle::DashDot:
-		Pattern = { Dash, Gap, Dot, Gap };
-		PatternDot = { false, false, true, false };
+		Pattern[0] = Dash; Pattern[1] = Gap; Pattern[2] = Dot; Pattern[3] = Gap;
+		PatternDot = DotFlagsDashDot; PatternNum = 4;
 		break;
 	case ESCADALineStyle::DashDotDot:
-		Pattern = { Dash, Gap, Dot, Gap, Dot, Gap };
-		PatternDot = { false, false, true, false, true, false };
+		Pattern[0] = Dash; Pattern[1] = Gap; Pattern[2] = Dot; Pattern[3] = Gap; Pattern[4] = Dot; Pattern[5] = Gap;
+		PatternDot = DotFlagsDashDotDot; PatternNum = 6;
 		break;
 	default: return;
 	}
@@ -351,7 +368,7 @@ void SSCADALine::BuildSegmentPoints(const TArray<FVector2D>& Polyline, TArray<FV
 				}
 			}
 			Dist = Next;
-			PatternIdx = (PatternIdx + 1) % Pattern.Num();
+			PatternIdx = (PatternIdx + 1) % PatternNum;
 		}
 		Cumulative += Len;
 	}
@@ -462,9 +479,17 @@ void SSCADALine::AppendArrow(FSlateWindowElementList& OutDrawElements, int32 Lay
 	TArray<SlateIndex> Indexes = { 0, 1, 2 };
 	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
 
-	// 箭头轮廓抗锯齿覆层（CustomVerts 三角无 AA；见 DrawContourAA 说明）
-	const TArray<FVector2D> ArrowLoop = { Tip, Base + Wing, Base - Wing, Tip };
-	DrawContourAA(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(), ArrowLoop, InColor, DrawEffects);
+	// 箭头轮廓抗锯齿覆层（CustomVerts 三角无 AA；见 DrawContourAA 说明）。
+	// 复用缓冲：函数内 static（Slate 绘制单线程，static 初始化自 C++11 起线程安全，
+	// 与 SCADAStroke::GetSolidBrush 的 static 笔刷同一先例）——Reset(4) 后跨调用只覆写，
+	// 消除每次调用的 4 元素 initializer-list 堆分配（普通局部 TArray 仍会每次分配，不解决问题）。
+	static TArray<FVector2D> ArrowLoopBuf;
+	ArrowLoopBuf.Reset(4);
+	ArrowLoopBuf.Add(Tip);
+	ArrowLoopBuf.Add(Base + Wing);
+	ArrowLoopBuf.Add(Base - Wing);
+	ArrowLoopBuf.Add(Tip);
+	DrawContourAA(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(), ArrowLoopBuf, InColor, DrawEffects);
 }
 
 void SSCADALine::DrawContourAA(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FPaintGeometry& PaintGeom,

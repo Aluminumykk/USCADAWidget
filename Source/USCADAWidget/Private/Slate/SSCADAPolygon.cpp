@@ -204,6 +204,8 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 				TArray<FVector2D> DashPairs;
 				TArray<bool> DashIsDot;
 				BuildSegmentPoints(Smoothed, DashPairs, DashIsDot, 0.0f, 0.0f);
+				TArray<FVector2D> DashPair; // 复用缓冲（MakeLines 只接受 const TArray&）：首段分配一次、后续只覆写
+				TArray<FVector2D> DotLoopBuf; // 同上：点方块轮廓覆层的 5 元素闭环缓冲
 				for (int32 Seg = 0; 2 * Seg + 1 < DashPairs.Num(); ++Seg)
 				{
 					const FVector2D A = DashPairs[2 * Seg];
@@ -231,17 +233,22 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 						{
 							return FVector2D(Center.X + X * CosA - Y * SinA, Center.Y + X * SinA + Y * CosA);
 						};
-						const TArray<FVector2D> DotLoop =
-						{
-							RotCorner(-DotH, -DotH), RotCorner(DotH, -DotH), RotCorner(DotH, DotH), RotCorner(-DotH, DotH), RotCorner(-DotH, -DotH)
-						};
-						DrawContourAA(OutDrawElements, LayerId, PaintGeom, DotLoop, BorderFinalColor, DrawEffects);
+						DotLoopBuf.Reset(5);
+						DotLoopBuf.Add(RotCorner(-DotH, -DotH));
+						DotLoopBuf.Add(RotCorner(DotH, -DotH));
+						DotLoopBuf.Add(RotCorner(DotH, DotH));
+						DotLoopBuf.Add(RotCorner(-DotH, DotH));
+						const FVector2D DotLoopFirst = DotLoopBuf[0]; // 先拷贝再 Add，避免自引用触发 TArray 检查
+						DotLoopBuf.Add(DotLoopFirst);
+						DrawContourAA(OutDrawElements, LayerId, PaintGeom, DotLoopBuf, BorderFinalColor, DrawEffects);
 					}
 					else
 					{
 						// 划：独立两点线段（MakeLines 只连这两个点）
-						TArray<FVector2D> Pair = { A, B };
-						FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, Pair, DrawEffects, BorderFinalColor, /*bAntialias=*/true, ScaledLineThickness);
+						DashPair.Reset(2);
+						DashPair.Add(A);
+						DashPair.Add(B);
+						FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, DashPair, DrawEffects, BorderFinalColor, /*bAntialias=*/true, ScaledLineThickness);
 					}
 				}
 			}

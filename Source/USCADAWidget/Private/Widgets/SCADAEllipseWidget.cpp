@@ -12,15 +12,20 @@ TSharedRef<SWidget> USCADAEllipseWidget::RebuildWidget()
 {
 	MyEllipse = SNew(SSCADAEllipse);
 
-	// UWidget 没有原生 Tick，借 Slate 层的 Tick 轮询槽矩形变化
-	TWeakObjectPtr<USCADAEllipseWidget> WeakThis(this);
-	MyEllipse->ExternalTickCallback = [WeakThis]()
+	// UWidget 没有原生 Tick，借 Slate 层的 Tick 轮询槽矩形变化。
+	// 槽同步状态机纯服务 UMG 设计器（拖动回写/面板编辑/撤销识别/落点认领），
+	// 运行时（PIE/游戏世界）不挂接（GetWorld()==nullptr 仍认编辑器：设计器预览实例可能拿不到世界）
+	if (GIsEditor && (!GetWorld() || !GetWorld()->IsGameWorld()))
 	{
-		if (WeakThis.IsValid())
+		TWeakObjectPtr<USCADAEllipseWidget> WeakThis(this);
+		MyEllipse->ExternalTickCallback = [WeakThis]()
 		{
-			WeakThis->CheckSlotSync();
-		}
-	};
+			if (WeakThis.IsValid())
+			{
+				WeakThis->CheckSlotSync();
+			}
+		};
+	}
 
 	// archetype 实例（Slate 不一定被 Tick）也要能跑 CheckSlotSync，
 	// 否则面板拖放的落点（静默写在 archetype 槽上）永远认领不到
@@ -32,6 +37,12 @@ TSharedRef<SWidget> USCADAEllipseWidget::RebuildWidget()
 void USCADAEllipseWidget::EnsureCoreTicker()
 {
 	if (CoreTickerHandle.IsValid())
+	{
+		return;
+	}
+	// 槽同步轮询纯服务 UMG 设计器：运行时（PIE/游戏世界）不注册核心 Ticker
+	// （RebuildWidget/ForceSyncFromSlotRect 两处注册路径都经过这里，一处守卫全部生效）
+	if (!GIsEditor || (GetWorld() && GetWorld()->IsGameWorld()))
 	{
 		return;
 	}

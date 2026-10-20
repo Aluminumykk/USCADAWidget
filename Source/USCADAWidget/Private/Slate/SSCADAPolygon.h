@@ -6,6 +6,7 @@
 #include "Slate/SSCADALine.h"
 #include "SCADAWidgetTypes.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Rendering/RenderingCommon.h"
 
 /**
  * 底层 Slate 多边形控件：闭合折线（首尾相连）+ 填充（对应 WinCC 的“多边形”对象）。
@@ -86,14 +87,11 @@ private:
 	 *  DrawTriangleList 据此选择顶点取整模式） */
 	mutable bool bSmoothContourActive = false;
 
-	/** 画多边形填充：耳切三角化（支持凹多边形）后用 DrawTriangleList 一次画出；
-	 *  三角化失败（退化/自交/共线）时静默返回。 */
-	void DrawPolygonFill(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-		const TArray<FVector2D>& Vertices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const;
-
-	/** 按索引画实心三角形列表（一次 MakeCustomVerts，白纹理回退，纯色顶点 tint） */
+	/** 画按索引展开的实心三角形列表（一次 MakeCustomVerts，白纹理回退，纯色顶点 tint）：
+	 *  TriVerts 已按三角形顺序逐顶点展开，IdentityIndices 为配套的恒等索引列（0..N-1），
+	 *  二者均来自几何缓存（SCADAStroke::ExpandTriangleList 在缓存重建时一次性生成）。 */
 	void DrawTriangleList(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-		const TArray<FVector2D>& Vertices, const TArray<int32>& Indices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const;
+		const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const;
 
 	/** 闭合轮廓整体偏移 OffsetDistance（边框外画用，正=向内 / 负=向外）：逐顶点取相邻
 	 *  两边偏移线的斜接交点（miter，限幅 4x 防尖角爆炸），凹顶点由同一公式自然处理。
@@ -107,4 +105,46 @@ private:
 	TAttribute<FLinearColor> FillColor;
 	/** 填充图案：实心 / 透明 */
 	TAttribute<ESCADAFillPattern> FillPattern;
+
+	/** 几何脏标记缓存：OnPaint 的重几何（耳切三角化 / 内缩环带 BuildOffsetContour / 环带顶点
+	 *  索引构建 / 虚线圆角环与划段拆分）只在键变化时重算，命中时直接用缓存几何重建 draw
+	 *  elements（draw element 本就不能跨帧持有，每帧照调，缓存的只是几何数据）。
+	 *  键 = 影响几何的全部输入：Points 内容（逐元素精确比较；Ellipse 的半径/显式 LocalCenter、
+	 *  Rectangle 的尺寸/圆角都已由子类 ResamplePerimeter 采样进 Points，无需单独进键）+
+	 *  Thickness（内缩距离/虚线划模式点长）+ LineStyle + bSmoothContourActive（决定取整后的
+	 *  Poly 内容）。颜色/闪烁/FillPattern 不进键（只影响绘制参数或分支选择，不改变几何；
+	 *  各分支结果带独立的 bComputed 标记，分支首次被走到时惰性计算，键一致即几何有效）。 */
+	struct FGeometryCache
+	{
+		bool bValid = false;
+		TArray<FVector2D> KeyPoints;
+		float KeyThickness = 0.0f;
+		ESCADALineStyle KeyLineStyle = ESCADALineStyle::Solid;
+		bool bKeySmoothContour = false;
+
+		/** 取整后的轮廓（未闭合，内缩偏移的输入） */
+		TArray<FVector2D> Poly;
+		/** 闭合外环（末尾回接首点）：填充三角化的输入、轮廓 AA 覆层直接用（缓存即闭口，不再每帧拷贝） */
+		TArray<FVector2D> Closed;
+
+		// 填充分支（FillPattern=Solid 首次走到时计算）
+		bool bFillComputed = false;
+		bool bFillValid = false; // 三角化成功（退化/自交失败时静默跳过填充）
+		TArray<FVector2D> FillTriVerts;
+		TArray<SlateIndex> FillIdentityIndices;
+
+		// 实线边框分支（环带四边形条带）
+		bool bBandComputed = false;
+		bool bBandValid = false; // 内缩未坍塌
+		TArray<FVector2D> InnerRing;        // 内缩 T 的闭合环（内缘 AA 覆层用）
+		TArray<FVector2D> BandTriVerts;     // 按三角形索引展开的环带顶点
+		TArray<SlateIndex> BandIdentityIndices;
+
+		// 虚线边框分支（划段点列）
+		bool bDashComputed = false;
+		bool bDashValid = false; // 内缩 T/2 未坍塌
+		TArray<FVector2D> DashPairs;
+		TArray<bool> DashIsDot;
+	};
+	mutable FGeometryCache GeoCache;
 };

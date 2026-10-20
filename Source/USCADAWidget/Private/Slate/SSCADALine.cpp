@@ -13,25 +13,21 @@
 // 像素对齐 / 纯色笔刷 / 白色填充句柄已收进共享头 Slate/SCADAStrokeGeometry.h（SCADAStroke 命名空间）
 
 /** 三角形列表实心填充（笔画包络用）：一次 MakeCustomVerts；顶点**不取整**（包络是亚像素精确
- *  轮廓，取整会把肘部圆弧量化成台阶；边缘柔化由沿包络的 DrawContourAA 覆层负责） */
+ *  轮廓，取整会把肘部圆弧量化成台阶；边缘柔化由沿包络的 DrawContourAA 覆层负责）。
+ *  TriVerts 已按三角形顺序逐顶点展开（几何缓存重建时一次性生成），本函数只做逐顶点
+ *  FSlateVertex 变换（累积渲染变换每帧可能变，顶点元素本就不能跨帧持有），恒等索引直接复用缓存。 */
 static void DrawTriFilled(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-	const TArray<FVector2D>& Vertices, const TArray<int32>& Triangles, const FLinearColor& InColor, ESlateDrawEffect DrawEffects)
+	const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects)
 {
 	const FSlateRenderTransform& RT = AllottedGeometry.GetAccumulatedRenderTransform();
 	const FColor Tint = InColor.ToFColor(true);
 	TArray<FSlateVertex> Verts;
-	Verts.Reserve(Triangles.Num());
-	for (int32 i = 0; i < Triangles.Num(); ++i)
+	Verts.Reserve(TriVerts.Num());
+	for (int32 i = 0; i < TriVerts.Num(); ++i)
 	{
-		Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(Vertices[Triangles[i]]), FVector2f::ZeroVector, Tint));
+		Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, Tint));
 	}
-	TArray<SlateIndex> Indexes;
-	Indexes.Reserve(Triangles.Num());
-	for (int32 i = 0; i < Triangles.Num(); ++i)
-	{
-		Indexes.Add(static_cast<SlateIndex>(i));
-	}
-	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
+	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, IdentityIndices, nullptr, 0, 0, DrawEffects);
 }
 
 void SSCADALine::Construct(const FArguments& InArgs)
@@ -100,25 +96,12 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 		return LayerId;
 	}
 
-	TArray<FVector2D> Polyline;
-	Polyline.SetNumUninitialized(RawPolyline.Num());
-	for (int32 i = 0; i < RawPolyline.Num(); ++i)
-	{
-		Polyline[i] = SCADAStroke::SnapToPixel(RawPolyline[i]);
-	}
-
-	// 拐角处理两条路线（实线包络法内部也复用圆弧替换，见 SCADAStrokeGeometry.h 设计说明）：
-	// 实线 = 中心线拐角圆弧替换（默认半径，drawio rounded 语义）→ 两侧偏移包络 → 一次填色 +
-	//   沿包络覆层（见下方实线分支）。不用"圆弧微段描边"：FLineBuilder 对短微段的斜接判定
-	//   必然失败，粗线下退化为"矩形盖帽+断裂重开"留一串楔形缺口；包络法无描边，无此问题。
-	// 虚线 = 以 线宽/2 为半径把尖角替换成圆弧采样，让划线模式沿圆角流动
-	//   （虚线各段本就独立成对绘制，段间没有连接问题）。
-	if (LineStyle.Get() != ESCADALineStyle::Solid)
-	{
-		TArray<FVector2D> Smoothed;
-		BuildRoundedPolyline(Polyline, Thickness.Get() * 0.5f, Smoothed);
-		Polyline = MoveTemp(Smoothed);
-	}
+	// TAttribute 统一在本函数开头取值一次：几何缓存键与本帧绘制参数共用，避免多处重复 Get
+	const float LineThickness = Thickness.Get();
+	const ESCADALineStyle CurLineStyle = LineStyle.Get();
+	const ESCADALineEndStyle StartStyle = LineStartStyle.Get();
+	const ESCADALineEndStyle EndStyle = LineEndStyle.Get();
+	const ESCADALineCap CurLineCap = LineCap.Get();
 
 	const bool bEnabled = ShouldBeEnabled(bParentEnabled);
 	const ESlateDrawEffect DrawEffects = bEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
@@ -129,11 +112,105 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 	const FLinearColor BaseColor = bShowFlash ? FlashColor.Get() : Color.Get();
 	const FLinearColor FinalColor = BaseColor * InWidgetStyle.GetColorAndOpacityTint();
 	const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
-	const float LineThickness = Thickness.Get();
 	// MakeLines 的线宽不随几何体变换缩放（点位会），而圆顶/点方块/箭头都是按几何体绘制的，
 	// 画布 Zoom（或 DPI 缩放）≠1 时线身宽度会与它们脱节；这里手动乘累积变换缩放。
 	const float RenderScale = (float)(AllottedGeometry.LocalToAbsolute(FVector2D(1.0, 0.0)) - AllottedGeometry.LocalToAbsolute(FVector2D::ZeroVector)).Size();
 	const float ScaledLineThickness = LineThickness * RenderScale;
+
+	// 箭头尺寸随线宽自适应：长度至少为 4 倍线宽，半宽为长度的一半。
+	const float EffectiveArrowSize = FMath::Max(ArrowSize, LineThickness * 4.0f);
+	const float TrimStart = (StartStyle == ESCADALineEndStyle::Arrow) ? EffectiveArrowSize : 0.0f;
+	const float TrimEnd = (EndStyle == ESCADALineEndStyle::Arrow) ? EffectiveArrowSize : 0.0f;
+
+	// 几何脏标记缓存：键 = 影响几何的全部输入（见 FGeometryCache 注释）。命中时跳过重几何
+	// （取整/拐角圆弧替换/笔画包络/耳切三角化/划段拆分），直接用缓存几何重建 draw elements。
+	// 拐角处理两条路线（实线包络法内部也复用圆弧替换，见 SCADAStrokeGeometry.h 设计说明）：
+	// 实线 = 中心线拐角圆弧替换（默认半径，drawio rounded 语义）→ 两侧偏移包络 → 一次填色 +
+	//   沿包络覆层。不用"圆弧微段描边"：FLineBuilder 对短微段的斜接判定必然失败，粗线下退化
+	//   为"矩形盖帽+断裂重开"留一串楔形缺口；包络法无描边，无此问题。
+	// 虚线 = 以 线宽/2 为半径把尖角替换成圆弧采样，让划线模式沿圆角流动
+	//   （虚线各段本就独立成对绘制，段间没有连接问题）。
+	FGeometryCache& C = GeoCache;
+	const bool bCacheHit = C.bValid
+		&& C.KeyThickness == LineThickness
+		&& C.KeyLineStyle == CurLineStyle
+		&& C.KeyStartStyle == StartStyle
+		&& C.KeyEndStyle == EndStyle
+		&& C.KeyLineCap == CurLineCap
+		&& C.KeyPoints == RawPolyline; // TArray 逐元素精确比较（数据层已取整，无漂移）
+	if (!bCacheHit)
+	{
+		C.KeyPoints = RawPolyline;
+		C.KeyThickness = LineThickness;
+		C.KeyLineStyle = CurLineStyle;
+		C.KeyStartStyle = StartStyle;
+		C.KeyEndStyle = EndStyle;
+		C.KeyLineCap = CurLineCap;
+		C.bValid = true;
+
+		C.Centerline.SetNumUninitialized(RawPolyline.Num());
+		for (int32 i = 0; i < RawPolyline.Num(); ++i)
+		{
+			C.Centerline[i] = SCADAStroke::SnapToPixel(RawPolyline[i]);
+		}
+
+		if (CurLineStyle != ESCADALineStyle::Solid)
+		{
+			// 虚线路径：圆角化中心线 + 划段拆分（“点”段标记随对列出）
+			TArray<FVector2D> Smoothed;
+			BuildRoundedPolyline(C.Centerline, LineThickness * 0.5f, Smoothed);
+			C.Centerline = MoveTemp(Smoothed);
+			// 有箭头的端裁剪掉箭头长度，避免点/划与箭头叠成平头
+			BuildSegmentPoints(C.Centerline, C.DashPairs, C.DashIsDot, TrimStart, TrimEnd);
+		}
+		else
+		{
+			// 实线路径 = **笔画包络，一次填色**（不是"逐段拼贴 + join 补偿"的堆叠）：
+			// ① 有箭头的端把线体缩短一个箭头长度，再往回探入 ArrowOverlap：线尾钻到箭头底边
+			//    内侧（箭头不透明且后绘制，盖住重叠区），避免"恰好相接"时接缝露缝；
+			// ② 中心线先做拐角小圆角替换（drawio rounded 语义：切点 = min(R/tan(θ/2), 邻段半长)，
+			//    圆角半径与线宽无关——这就是"小圆角过渡"的正确来源；join 圆盘方案被否：其半径只能
+			//    = 半线宽，锐角必成球、内侧还会多填鼓包，即此前"突兀/生硬"两难之根源）；
+			// ③ 两侧各偏移 ±半线宽构造**封闭包络多边形**（顶点 join = 相邻偏移线交点，外侧交点
+			//    超 10×半宽退化 bevel，≈SVG miterlimit 语义；端点 butt 平齐）；
+			// ④ 包络一次耳切三角化填色 + 沿包络 3px 轮廓覆层柔化边缘。
+			// 依据：Slate 无 path-stroke API，只能自实现 stroke 语义；drawio 渲染器表达不了变宽
+			// 笔画时（mxArrowConnector）同样退化为"自算封闭轮廓 + 填充"，路线同构。
+			// LineCap round / 箭头不参与包络：round 帽仍以端点圆盘叠加（butt 包络 ∪ 圆盘 = 圆帽），
+			// 箭头端先裁中心线、后画箭头盖根——与 drawio 同序，避免两层 AA 边缘混色接缝。
+			const float ArrowOverlap = FMath::Max(2.0f, LineThickness * 0.25f);
+			TArray<FVector2D> Body = C.Centerline;
+			if (TrimStart > 0.f) { Body[0] = C.Centerline[0] + (C.Centerline[1] - C.Centerline[0]).GetSafeNormal() * FMath::Max(TrimStart - ArrowOverlap, 0.0f); }
+			if (TrimEnd > 0.f) { const int32 N = Body.Num(); Body[N - 1] = C.Centerline.Last() + (C.Centerline[C.Centerline.Num() - 2] - C.Centerline.Last()).GetSafeNormal() * FMath::Max(TrimEnd - ArrowOverlap, 0.0f); }
+
+			static constexpr float CornerArcRadius = 10.0f; // 同 drawio LINE_ARCSIZE/2；将来可做成"圆角半径"暴露属性（drawio arcSize 语义）
+			TArray<FVector2D> RoundedBody;
+			BuildRoundedPolyline(Body, CornerArcRadius, RoundedBody);
+
+			C.bEnvelopeValid = (LineThickness > KINDA_SMALL_NUMBER)
+				&& SCADAStroke::BuildStrokeOutline(RoundedBody, LineThickness * 0.5f, C.EnvelopeClosed);
+			C.bEnvelopeTrisValid = false;
+			if (C.bEnvelopeValid)
+			{
+				// 三角化在未回接的包络上进行（与回接等价：耳切自动去相邻重复点），
+				// 包络点列随后就地回接首点成闭口环，覆层直接用（不再每帧拷贝）。
+				TArray<int32> EnvelopeTris;
+				C.bEnvelopeTrisValid = SCADAStroke::TriangulateEarClipping(C.EnvelopeClosed, EnvelopeTris);
+				if (C.bEnvelopeTrisValid)
+				{
+					SCADAStroke::ExpandTriangleList(C.EnvelopeClosed, EnvelopeTris, C.EnvelopeTriVerts, C.EnvelopeIdentityIndices);
+				}
+				const FVector2D EnvelopeFirst = C.EnvelopeClosed[0]; // 先拷贝再 Add，避免自引用触发 TArray 检查
+				C.EnvelopeClosed.Add(EnvelopeFirst);
+			}
+			else
+			{
+				C.EnvelopeClosed.Reset();
+				C.EnvelopeTriVerts.Reset();
+				C.EnvelopeIdentityIndices.Reset();
+			}
+		}
+	}
 
 	// 注意：MakeLines 会把传入的所有点连成一条折线（A,B,C → A-B-C）。
 	// 画不相连的独立线段必须每两个点调用一次 MakeLines。
@@ -182,97 +259,58 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 		DrawContourAA(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(), DotLoopBuf, FinalColor, DrawEffects);
 	};
 
-	// 箭头尺寸随线宽自适应：长度至少为 4 倍线宽，半宽为长度的一半。
-	const ESCADALineEndStyle StartStyle = LineStartStyle.Get();
-	const ESCADALineEndStyle EndStyle = LineEndStyle.Get();
-	const float EffectiveArrowSize = FMath::Max(ArrowSize, LineThickness * 4.0f);
-	const float TrimStart = (StartStyle == ESCADALineEndStyle::Arrow) ? EffectiveArrowSize : 0.0f;
-	const float TrimEnd = (EndStyle == ESCADALineEndStyle::Arrow) ? EffectiveArrowSize : 0.0f;
-
-	if (LineStyle.Get() == ESCADALineStyle::Solid)
+	if (CurLineStyle == ESCADALineStyle::Solid)
 	{
-		// 有箭头的端把线体缩短一个箭头长度，再往回探入 ArrowOverlap：
-		// 线尾钻到箭头底边内侧（箭头不透明且后绘制，盖住重叠区），
-		// 避免"恰好相接"时接缝露缝。
-		const float ArrowOverlap = FMath::Max(2.0f, LineThickness * 0.25f);
-		TArray<FVector2D> Body = Polyline;
-		if (TrimStart > 0.f) { Body[0] = Polyline[0] + (Polyline[1] - Polyline[0]).GetSafeNormal() * FMath::Max(TrimStart - ArrowOverlap, 0.0f); }
-		if (TrimEnd > 0.f) { const int32 N = Body.Num(); Body[N - 1] = Polyline.Last() + (Polyline[Polyline.Num() - 2] - Polyline.Last()).GetSafeNormal() * FMath::Max(TrimEnd - ArrowOverlap, 0.0f); }
-
-		// 线体 = **笔画包络，一次填色**（不是"逐段拼贴 + join 补偿"的堆叠）：
-		// ① 中心线先做拐角小圆角替换（drawio rounded 语义：切点 = min(R/tan(θ/2), 邻段半长)，
-		//    圆角半径与线宽无关——这就是"小圆角过渡"的正确来源；join 圆盘方案被否：其半径只能
-		//    = 半线宽，锐角必成球、内侧还会多填鼓包，即此前"突兀/生硬"两难之根源）；
-		// ② 两侧各偏移 ±半线宽构造**封闭包络多边形**（顶点 join = 相邻偏移线交点，外侧交点
-		//    超 10×半宽退化 bevel，≈SVG miterlimit 语义；端点 butt 平齐）；
-		// ③ 包络一次耳切三角化填色 + 沿包络 3px 轮廓覆层柔化边缘。
-		// 依据：Slate 无 path-stroke API，只能自实现 stroke 语义；drawio 渲染器表达不了变宽
-		// 笔画时（mxArrowConnector）同样退化为"自算封闭轮廓 + 填充"，路线同构。
-		// LineCap round / 箭头不参与包络：round 帽仍以端点圆盘叠加（butt 包络 ∪ 圆盘 = 圆帽），
-		// 箭头端先裁中心线、后画箭头盖根——与 drawio 同序，避免两层 AA 边缘混色接缝。
+		if (C.bEnvelopeValid)
 		{
-			static constexpr float CornerArcRadius = 10.0f; // 同 drawio LINE_ARCSIZE/2；将来可做成"圆角半径"暴露属性（drawio arcSize 语义）
-			TArray<FVector2D> RoundedBody;
-			BuildRoundedPolyline(Body, CornerArcRadius, RoundedBody);
-			TArray<FVector2D> Envelope;
-			if (LineThickness > KINDA_SMALL_NUMBER && SCADAStroke::BuildStrokeOutline(RoundedBody, LineThickness * 0.5f, Envelope))
+			if (C.bEnvelopeTrisValid)
 			{
-				TArray<int32> EnvelopeTris;
-				if (SCADAStroke::TriangulateEarClipping(Envelope, EnvelopeTris))
-				{
-					DrawTriFilled(OutDrawElements, LayerId, AllottedGeometry, Envelope, EnvelopeTris, FinalColor, DrawEffects);
-				}
-				// 填充可能因自交失败（极端尖角×超厚线），仍沿包络描边覆层，保证轮廓不缺
-				TArray<FVector2D> EnvelopeClosed = Envelope;
-				EnvelopeClosed.Add(Envelope[0]);
-				DrawContourAA(OutDrawElements, LayerId, PaintGeom, EnvelopeClosed, FinalColor, DrawEffects);
+				DrawTriFilled(OutDrawElements, LayerId, AllottedGeometry, C.EnvelopeTriVerts, C.EnvelopeIdentityIndices, FinalColor, DrawEffects);
 			}
+			// 填充可能因自交失败（极端尖角×超厚线），仍沿包络描边覆层，保证轮廓不缺
+			DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.EnvelopeClosed, FinalColor, DrawEffects);
 		}
 	}
 	else
 	{
 		// 虚线/点线/点划线/双点划线：逐段独立绘制；“点”段画 1:1 旋转实心方块。
-		// 有箭头的端裁剪掉箭头长度，避免点/划与箭头叠成平头。
-		TArray<FVector2D> DashPairs;
-		TArray<bool> DashIsDot;
-		BuildSegmentPoints(Polyline, DashPairs, DashIsDot, TrimStart, TrimEnd);
-		for (int32 Seg = 0; 2 * Seg + 1 < DashPairs.Num(); ++Seg)
+		for (int32 Seg = 0; 2 * Seg + 1 < C.DashPairs.Num(); ++Seg)
 		{
-			if (DashIsDot.IsValidIndex(Seg) && DashIsDot[Seg])
+			if (C.DashIsDot.IsValidIndex(Seg) && C.DashIsDot[Seg])
 			{
-				DrawDot(DashPairs[2 * Seg], DashPairs[2 * Seg + 1]);
+				DrawDot(C.DashPairs[2 * Seg], C.DashPairs[2 * Seg + 1]);
 			}
 			else
 			{
-				DrawSegment(DashPairs[2 * Seg], DashPairs[2 * Seg + 1], ScaledLineThickness);
+				DrawSegment(C.DashPairs[2 * Seg], C.DashPairs[2 * Seg + 1], ScaledLineThickness);
 			}
 		}
 	}
 
-	// 线端装饰：起点/终点独立设置（实心箭头）。
+	// 线端装饰：起点/终点独立设置（实心箭头）。廉价常量几何，每帧照画。
 	// 箭头用单个实心三角形（MakeCustomVerts，白色资源 tint = FinalColor）填充。
 	if (StartStyle == ESCADALineEndStyle::Arrow)
 	{
-		const FVector2D DirIn = (Polyline[1] - Polyline[0]).GetSafeNormal();
-		AppendArrow(OutDrawElements, LayerId, AllottedGeometry, Polyline[0], DirIn, EffectiveArrowSize, DrawEffects, FinalColor);
+		const FVector2D DirIn = (C.Centerline[1] - C.Centerline[0]).GetSafeNormal();
+		AppendArrow(OutDrawElements, LayerId, AllottedGeometry, C.Centerline[0], DirIn, EffectiveArrowSize, DrawEffects, FinalColor);
 	}
 	if (EndStyle == ESCADALineEndStyle::Arrow)
 	{
-		const FVector2D DirIn = (Polyline[Polyline.Num() - 2] - Polyline.Last()).GetSafeNormal();
-		AppendArrow(OutDrawElements, LayerId, AllottedGeometry, Polyline.Last(), DirIn, EffectiveArrowSize, DrawEffects, FinalColor);
+		const FVector2D DirIn = (C.Centerline[C.Centerline.Num() - 2] - C.Centerline.Last()).GetSafeNormal();
+		AppendArrow(OutDrawElements, LayerId, AllottedGeometry, C.Centerline.Last(), DirIn, EffectiveArrowSize, DrawEffects, FinalColor);
 	}
 
 	// 线端形状：圆形时在端点画以端点为圆心的实心圆盘（单个 MakeBox + 全圆圆角矩形笔刷）。
 	// 与箭头互斥：该端已是箭头则不画圆顶（两者叠加会很奇怪）。
-	if (LineCap.Get() == ESCADALineCap::Round)
+	if (CurLineCap == ESCADALineCap::Round)
 	{
 		if (StartStyle != ESCADALineEndStyle::Arrow)
 		{
-			AppendRoundCap(OutDrawElements, LayerId, AllottedGeometry, Polyline[0], DrawEffects, FinalColor);
+			AppendRoundCap(OutDrawElements, LayerId, AllottedGeometry, C.Centerline[0], DrawEffects, FinalColor);
 		}
 		if (EndStyle != ESCADALineEndStyle::Arrow)
 		{
-			AppendRoundCap(OutDrawElements, LayerId, AllottedGeometry, Polyline.Last(), DrawEffects, FinalColor);
+			AppendRoundCap(OutDrawElements, LayerId, AllottedGeometry, C.Centerline.Last(), DrawEffects, FinalColor);
 		}
 	}
 

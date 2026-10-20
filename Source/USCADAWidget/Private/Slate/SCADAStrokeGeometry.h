@@ -6,6 +6,7 @@
 #include "Math/Vector2D.h"
 #include "Styling/SlateBrush.h"
 #include "Rendering/SlateResourceHandle.h"
+#include "Rendering/RenderingCommon.h"
 #include "Framework/Application/SlateApplication.h"
 
 /**
@@ -172,6 +173,28 @@ namespace SCADAStroke
 		OutTriangles.Add(LiveIdx[1]);
 		OutTriangles.Add(LiveIdx[2]);
 		return true;
+	}
+
+	/**
+	 * 三角形列表展开：把"顶点 + 三角形索引"一次性展开成逐三角形顶点列（OutTriVerts[i] =
+	 * Vertices[Triangles[i]]）与恒等索引列（0..N-1）。MakeCustomVerts 的绘制侧本就是
+	 * "顶点按索引展开 + 恒等索引"，展开结果随几何缓存复用，消除每帧的索引间接寻址与
+	 * 恒等索引缓冲重建（几何脏标记缓存的配套工具）。
+	 */
+	inline void ExpandTriangleList(const TArray<FVector2D>& Vertices, const TArray<int32>& Triangles,
+		TArray<FVector2D>& OutTriVerts, TArray<SlateIndex>& OutIdentityIndices)
+	{
+		const int32 M = Triangles.Num();
+		OutTriVerts.SetNumUninitialized(M);
+		for (int32 i = 0; i < M; ++i)
+		{
+			OutTriVerts[i] = Vertices[Triangles[i]];
+		}
+		OutIdentityIndices.SetNumUninitialized(M);
+		for (int32 i = 0; i < M; ++i)
+		{
+			OutIdentityIndices[i] = static_cast<SlateIndex>(i);
+		}
 	}
 
 	/**

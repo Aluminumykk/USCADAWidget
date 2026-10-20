@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "SCADAWidgetTypes.h"
 #include "Widgets/SLeafWidget.h"
+#include "Rendering/RenderingCommon.h"
 
 /**
  * 底层 Slate 画线控件：绘制直线/折线（支持虚线、点线、端点箭头）。
@@ -110,4 +111,38 @@ protected:
 	float DashLength = 12.0f;
 	float GapLength = 6.0f;
 	float ArrowSize = 10.0f;
+
+private:
+	/** 几何脏标记缓存：OnPaint 的重几何（拐角圆弧替换 / 笔画包络 / 耳切三角化 / 划段拆分）
+	 *  只在键变化时重算，命中时直接用缓存几何重建 draw elements（draw element 本就不能跨帧
+	 *  持有，每帧照调 MakeCustomVerts/MakeLines/MakeBox，缓存的只是几何数据）。
+	 *  键 = 影响几何的全部输入：Points 内容（逐元素精确比较）+ Thickness（包络半宽/圆角半径/
+	 *  划模式点长/箭头裁剪量都依赖它）+ LineStyle + LineStartStyle/LineEndStyle（箭头样式经
+	 *  裁剪量改变线体几何）+ LineCap。颜色/闪烁不进键（只影响 draw element 的颜色参数）。
+	 *  DashLength/GapLength/ArrowSize 是 Construct 一次定值的普通成员（无 Setter），不进键。 */
+	struct FGeometryCache
+	{
+		bool bValid = false;
+		TArray<FVector2D> KeyPoints;
+		float KeyThickness = 0.0f;
+		ESCADALineStyle KeyLineStyle = ESCADALineStyle::Solid;
+		ESCADALineEndStyle KeyStartStyle = ESCADALineEndStyle::None;
+		ESCADALineEndStyle KeyEndStyle = ESCADALineEndStyle::None;
+		ESCADALineCap KeyLineCap = ESCADALineCap::None;
+
+		/** 取整后的中心线（虚线样式已做 T/2 圆角替换）：箭头/圆帽每帧定位也用它 */
+		TArray<FVector2D> Centerline;
+
+		// 实线路径缓存
+		bool bEnvelopeValid = false;     // 包络构建成功（线宽>0 且 BuildStrokeOutline 未退化）
+		bool bEnvelopeTrisValid = false; // 包络耳切三角化成功（极端尖角×超厚可能自交失败）
+		TArray<FVector2D> EnvelopeClosed;      // 封闭包络（已回接首点，覆层直接用，不再每帧拷贝）
+		TArray<FVector2D> EnvelopeTriVerts;    // 按三角形索引展开的填充顶点
+		TArray<SlateIndex> EnvelopeIdentityIndices;
+
+		// 虚线路径缓存（划段点列）
+		TArray<FVector2D> DashPairs;
+		TArray<bool> DashIsDot;
+	};
+	mutable FGeometryCache GeoCache;
 };

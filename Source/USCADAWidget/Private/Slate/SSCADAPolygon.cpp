@@ -39,21 +39,10 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	// 避免密集采样曲线的每段 ~0.3px 阶梯抖动被 AA 覆层放大成可见波浪（数据真值不变）
 	bSmoothContourActive = PaintsSmoothContour();
 
-	TArray<FVector2D> Poly;
-	Poly.SetNumUninitialized(RawPoints.Num());
-	for (int32 i = 0; i < RawPoints.Num(); ++i)
-	{
-		Poly[i] = bSmoothContourActive ? RawPoints[i] : SCADAStroke::SnapToPixel(RawPoints[i]);
-	}
-
-	// 闭合点列：原始点按序 + 首点回接
-	TArray<FVector2D> Closed;
-	Closed.Reserve(Poly.Num() + 1);
-	for (const FVector2D& P : Poly)
-	{
-		Closed.Add(P);
-	}
-	Closed.Add(Poly[0]);
+	// TAttribute 统一在本函数开头取值一次：几何缓存键与本帧绘制参数共用，避免多处重复 Get
+	const float LineThickness = Thickness.Get();
+	const ESCADALineStyle CurLineStyle = LineStyle.Get();
+	const ESCADAFillPattern CurFillPattern = FillPattern.Get();
 
 	const bool bEnabled = ShouldBeEnabled(bParentEnabled);
 	const ESlateDrawEffect DrawEffects = bEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
@@ -66,7 +55,6 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	const FLinearColor FillFinalColor = (bShowFlash ? FlashColor.Get() : FillColor.Get()) * InWidgetStyle.GetColorAndOpacityTint();
 
 	const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
-	const float LineThickness = Thickness.Get();
 	// MakeLines 的线宽不随几何体变换缩放（点位会），画布 Zoom（或 DPI 缩放）≠1 时手动乘累积变换缩放（与线同一规则）
 	const float RenderScale = (float)(AllottedGeometry.LocalToAbsolute(FVector2D(1.0, 0.0)) - AllottedGeometry.LocalToAbsolute(FVector2D::ZeroVector)).Size();
 	const float ScaledLineThickness = LineThickness * RenderScale;
@@ -76,11 +64,12 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	//    不变式）。圆角/边框宽度参数为局部单位，随渲染变换视觉等比，无需 RenderScale 补偿。
 	//    边框宽度会使内轮廓坍塌（T ≥ 小边一半）时不走此路径——与采样管线“内缩坍塌静默跳过
 	//    边框”的语义保持同侧（坍塌区间留给采样路径处理）。
+	//    O(1) 常量几何，无需走几何缓存，在缓存之前短路。
 	FAnalyticBox ABox;
-	if (LineStyle.Get() == ESCADALineStyle::Solid && TryGetAnalyticBox(ABox)
+	if (CurLineStyle == ESCADALineStyle::Solid && TryGetAnalyticBox(ABox)
 		&& LineThickness < FMath::Min(ABox.Size.X, ABox.Size.Y) * 0.5f)
 	{
-		const bool bDrawFill = (FillPattern.Get() == ESCADAFillPattern::Solid);
+		const bool bDrawFill = (CurFillPattern == ESCADAFillPattern::Solid);
 		const bool bDrawBorder = (LineThickness > KINDA_SMALL_NUMBER);
 		if (bDrawFill || bDrawBorder)
 		{
@@ -104,14 +93,65 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 		return LayerId + 1;
 	}
 
+	// 几何脏标记缓存：键 = 影响几何的全部输入（见 FGeometryCache 注释）。命中时跳过重几何
+	// （取整/闭合/三角化/内缩环带/划段拆分），直接用缓存几何重建 draw elements；
+	// 未命中时重建 Poly/Closed 并作废各分支结果（分支结果在首次被走到时惰性重算）。
+	FGeometryCache& C = GeoCache;
+	const bool bCacheHit = C.bValid
+		&& C.KeyThickness == LineThickness
+		&& C.KeyLineStyle == CurLineStyle
+		&& C.bKeySmoothContour == bSmoothContourActive
+		&& C.KeyPoints == RawPoints; // TArray 逐元素精确比较（数据层已取整/确定性采样，无漂移）
+	if (!bCacheHit)
+	{
+		C.KeyPoints = RawPoints;
+		C.KeyThickness = LineThickness;
+		C.KeyLineStyle = CurLineStyle;
+		C.bKeySmoothContour = bSmoothContourActive;
+		C.bValid = true;
+
+		C.Poly.SetNumUninitialized(RawPoints.Num());
+		for (int32 i = 0; i < RawPoints.Num(); ++i)
+		{
+			C.Poly[i] = bSmoothContourActive ? RawPoints[i] : SCADAStroke::SnapToPixel(RawPoints[i]);
+		}
+
+		// 闭合点列：原始点按序 + 首点回接（缓存结果即闭口环，覆层直接用，不再每帧拷贝）
+		C.Closed = C.Poly;
+		C.Closed.Add(C.Poly[0]);
+
+		C.bFillComputed = false;
+		C.bBandComputed = false;
+		C.bDashComputed = false;
+	}
+
 	// 是否将按实线样式画内画边框（决定填充是否需要自带轮廓覆层：实线边框时其环带 +
 	// 边框色覆层完整覆盖填充轮廓；若再画填充色覆层会在边框外缘外出现一半个像素的杂色晕）
-	const bool bBorderSolidDrawn = (LineThickness > KINDA_SMALL_NUMBER) && (LineStyle.Get() == ESCADALineStyle::Solid);
+	const bool bBorderSolidDrawn = (LineThickness > KINDA_SMALL_NUMBER) && (CurLineStyle == ESCADALineStyle::Solid);
 
-	// 1) 填充（实心）：耳切三角化 + 一次 MakeCustomVerts 实心三角扇；三角化失败静默跳过（仍画边框）
-	if (FillPattern.Get() == ESCADAFillPattern::Solid)
+	// 1) 填充（实心）：耳切三角化 + 一次 MakeCustomVerts 实心三角扇；三角化失败静默跳过（仍画边框）。
+	//    三角化结果随缓存复用（几何不变时不再每帧耳切）。
+	if (CurFillPattern == ESCADAFillPattern::Solid)
 	{
-		DrawPolygonFill(OutDrawElements, LayerId, AllottedGeometry, Closed, FillFinalColor, DrawEffects);
+		if (!C.bFillComputed)
+		{
+			C.bFillComputed = true;
+			TArray<int32> Triangles;
+			C.bFillValid = SCADAStroke::TriangulateEarClipping(C.Closed, Triangles);
+			if (C.bFillValid)
+			{
+				SCADAStroke::ExpandTriangleList(C.Closed, Triangles, C.FillTriVerts, C.FillIdentityIndices);
+			}
+			else
+			{
+				C.FillTriVerts.Reset();
+				C.FillIdentityIndices.Reset();
+			}
+		}
+		if (C.bFillValid)
+		{
+			DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.FillTriVerts, C.FillIdentityIndices, FillFinalColor, DrawEffects);
+		}
 
 		// 填充轮廓抗锯齿覆层（CustomVerts 无抗锯齿）：沿外轮廓覆一条 3 屏幕像素宽的
 		// 同色闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），把边缘外包络换成
@@ -119,7 +159,7 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 		// 更高层，不受影响）。
 		if (!bBorderSolidDrawn)
 		{
-			DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, FillFinalColor, DrawEffects);
+			DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.Closed, FillFinalColor, DrawEffects);
 		}
 	}
 
@@ -130,52 +170,65 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	if (LineThickness > KINDA_SMALL_NUMBER)
 	{
 		++LayerId; // 边框层：严格高于填充层
-		if (LineStyle.Get() == ESCADALineStyle::Solid)
+		if (CurLineStyle == ESCADALineStyle::Solid)
 		{
 			// 实心边框 = 环带四边形条带（不做耳切）：外环 = 原始轮廓（尖角精确到几何
 			// 顶点），内环 = 内缩 T 的轮廓；逐边两个三角形（外边缘 i→j + 内边缘 j→i），
 			// 相邻四边形共享边、零缝隙、无失败模式。注意**不能**把"外环正向 + 内环倒序"
 			// 拼成单环多边形做耳切——单桥接的环带在闭合边那一侧根本没被围进多边形
 			// （最后一段环带丢失）；描边方案在尖角处靠圆盘/斜接拐弯也盖不住角尖。
-			TArray<FVector2D> InnerRing;
-			if (BuildOffsetContour(Poly, LineThickness, InnerRing))
+			if (!C.bBandComputed)
 			{
-				const int32 N = Poly.Num();
-				TArray<FVector2D> BandVerts;
-				BandVerts.Reserve(2 * N);
-				for (int32 i = 0; i < N; ++i)
+				C.bBandComputed = true;
+				C.bBandValid = BuildOffsetContour(C.Poly, LineThickness, C.InnerRing);
+				if (C.bBandValid)
 				{
-					BandVerts.Add(Poly[i]);
-				}
-				for (int32 i = 0; i < N; ++i)
-				{
-					BandVerts.Add(InnerRing[i]);
-				}
+					const int32 N = C.Poly.Num();
+					TArray<FVector2D> BandVerts;
+					BandVerts.Reserve(2 * N);
+					for (int32 i = 0; i < N; ++i)
+					{
+						BandVerts.Add(C.Poly[i]);
+					}
+					for (int32 i = 0; i < N; ++i)
+					{
+						BandVerts.Add(C.InnerRing[i]);
+					}
 
-				TArray<int32> BandIndices;
-				BandIndices.Reserve(6 * N);
-				for (int32 i = 0; i < N; ++i)
-				{
-					const int32 j = (i + 1) % N;
-					BandIndices.Add(i);
-					BandIndices.Add(j);
-					BandIndices.Add(N + j);
-					BandIndices.Add(i);
-					BandIndices.Add(N + j);
-					BandIndices.Add(N + i);
+					TArray<int32> BandIndices;
+					BandIndices.Reserve(6 * N);
+					for (int32 i = 0; i < N; ++i)
+					{
+						const int32 j = (i + 1) % N;
+						BandIndices.Add(i);
+						BandIndices.Add(j);
+						BandIndices.Add(N + j);
+						BandIndices.Add(i);
+						BandIndices.Add(N + j);
+						BandIndices.Add(N + i);
+					}
+					SCADAStroke::ExpandTriangleList(BandVerts, BandIndices, C.BandTriVerts, C.BandIdentityIndices);
 				}
-				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, BandVerts, BandIndices, BorderFinalColor, DrawEffects);
+				else
+				{
+					C.BandTriVerts.Reset();
+					C.BandIdentityIndices.Reset();
+				}
+			}
+			if (C.bBandValid)
+			{
+				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.BandTriVerts, C.BandIdentityIndices, BorderFinalColor, DrawEffects);
 
 				// 环带外缘抗锯齿覆层：沿外轮廓（原始轮廓）覆一条 3 屏幕像素宽的同色
 				//（边框色）闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），
 				// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边。
-				DrawContourAA(OutDrawElements, LayerId, PaintGeom, Closed, BorderFinalColor, DrawEffects);
+				DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.Closed, BorderFinalColor, DrawEffects);
 
 				// 环带内缘抗锯齿覆层（边框色，沿内缩轮廓）：内缘是边框与填充的交界，
 				// 此前是唯一未处理的硬曲线——直边多边形上不可见，但椭圆/圆角矩形的
 				// 弧形内缘会沿曲线显出锯齿；补齐后与 SDF 边框（内缘本有解析 AA）语义
 				// 对齐，直线图元同样受益（交界 1px 渐变属正常渲染器行为）。
-				DrawContourAA(OutDrawElements, LayerId, PaintGeom, InnerRing, BorderFinalColor, DrawEffects);
+				DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.InnerRing, BorderFinalColor, DrawEffects);
 			}
 		}
 		else
@@ -183,34 +236,45 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 			// 虚线系：把尖角换成半径 线宽/2 的圆弧采样，让划线模式沿圆角流动。
 			// 从首边中点 M 出发、回到 M 收尾：所有原始顶点都成为内部点，全部被圆角化
 			// （BuildRoundedPolyline 不圆首/末点；M 与首边共线，无拐角）。内缩失败
-			// （轮廓坍塌）静默跳过边框。
-			TArray<FVector2D> Ring;
-			if (BuildOffsetContour(Poly, LineThickness * 0.5f, Ring))
+			// （轮廓坍塌）静默跳过边框。划段拆分结果随缓存复用。
+			if (!C.bDashComputed)
 			{
-				const FVector2D M = (Ring[0] + Ring[1]) * 0.5f;
-				TArray<FVector2D> Loop;
-				Loop.Reserve(Ring.Num() + 1);
-				Loop.Add(M);
-				for (int32 i = 1; i < Ring.Num(); ++i)
+				C.bDashComputed = true;
+				TArray<FVector2D> Ring;
+				C.bDashValid = BuildOffsetContour(C.Poly, LineThickness * 0.5f, Ring);
+				if (C.bDashValid)
 				{
-					Loop.Add(Ring[i]);
+					const FVector2D M = (Ring[0] + Ring[1]) * 0.5f;
+					TArray<FVector2D> Loop;
+					Loop.Reserve(Ring.Num() + 1);
+					Loop.Add(M);
+					for (int32 i = 1; i < Ring.Num(); ++i)
+					{
+						Loop.Add(Ring[i]);
+					}
+					Loop.Add(M);
+
+					TArray<FVector2D> Smoothed;
+					BuildRoundedPolyline(Loop, LineThickness * 0.5f, Smoothed);
+
+					// 逐段拆分（Trim=0：多边形无箭头裁剪区）；“点”段画旋转实心方块
+					BuildSegmentPoints(Smoothed, C.DashPairs, C.DashIsDot, 0.0f, 0.0f);
 				}
-				Loop.Add(M);
-
-				TArray<FVector2D> Smoothed;
-				BuildRoundedPolyline(Loop, LineThickness * 0.5f, Smoothed);
-
-				// 逐段拆分（Trim=0：多边形无箭头裁剪区）；“点”段画旋转实心方块
-				TArray<FVector2D> DashPairs;
-				TArray<bool> DashIsDot;
-				BuildSegmentPoints(Smoothed, DashPairs, DashIsDot, 0.0f, 0.0f);
+				else
+				{
+					C.DashPairs.Reset();
+					C.DashIsDot.Reset();
+				}
+			}
+			if (C.bDashValid)
+			{
 				TArray<FVector2D> DashPair; // 复用缓冲（MakeLines 只接受 const TArray&）：首段分配一次、后续只覆写
 				TArray<FVector2D> DotLoopBuf; // 同上：点方块轮廓覆层的 5 元素闭环缓冲
-				for (int32 Seg = 0; 2 * Seg + 1 < DashPairs.Num(); ++Seg)
+				for (int32 Seg = 0; 2 * Seg + 1 < C.DashPairs.Num(); ++Seg)
 				{
-					const FVector2D A = DashPairs[2 * Seg];
-					const FVector2D B = DashPairs[2 * Seg + 1];
-					if (DashIsDot.IsValidIndex(Seg) && DashIsDot[Seg])
+					const FVector2D A = C.DashPairs[2 * Seg];
+					const FVector2D B = C.DashPairs[2 * Seg + 1];
+					if (C.DashIsDot.IsValidIndex(Seg) && C.DashIsDot[Seg])
 					{
 						// 点：严格 1:1 实心方块（边长 = 线宽），沿线段方向旋转（与线同一规则）
 						const FVector2D Center = SCADAStroke::SnapToPixel((A + B) * 0.5);
@@ -259,47 +323,32 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 }
 
 void SSCADAPolygon::DrawTriangleList(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-	const TArray<FVector2D>& Vertices, const TArray<int32>& Indices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const
+	const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const
 {
 	// 一次 MakeCustomVerts 实心三角扇：白色资源句柄回退（与 SSCADALine::AppendArrow 同一条路径），
 	// 顶点位置在“绘制空间”（累积渲染变换后做像素对齐，与线体顶点同一规则），纯色由顶点 tint 决定。
 	// 平滑曲线轮廓（bSmoothContourActive，见 PaintsSmoothContour）跳过顶点取整，保留亚像素几何。
+	// TriVerts 已按三角形顺序展开（几何缓存重建时一次性生成），本函数只做逐顶点 FSlateVertex
+	// 变换（累积渲染变换每帧可能变，顶点元素本就不能跨帧持有），恒等索引直接复用缓存。
 	const FSlateRenderTransform& RT = AllottedGeometry.GetAccumulatedRenderTransform();
 	const FColor Tint = InColor.ToFColor(true);
 	TArray<FSlateVertex> Verts;
-	Verts.Reserve(Indices.Num());
+	Verts.Reserve(TriVerts.Num());
 	if (bSmoothContourActive)
 	{
-		for (int32 i = 0; i < Indices.Num(); ++i)
+		for (int32 i = 0; i < TriVerts.Num(); ++i)
 		{
-			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(Vertices[Indices[i]]), FVector2f::ZeroVector, Tint));
+			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, Tint));
 		}
 	}
 	else
 	{
-		for (int32 i = 0; i < Indices.Num(); ++i)
+		for (int32 i = 0; i < TriVerts.Num(); ++i)
 		{
-			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(Vertices[Indices[i]]), FVector2f::ZeroVector, Tint));
+			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, Tint));
 		}
 	}
-	TArray<SlateIndex> Indexes;
-	Indexes.Reserve(Indices.Num());
-	for (int32 i = 0; i < Indices.Num(); ++i)
-	{
-		Indexes.Add(i);
-	}
-	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, Indexes, nullptr, 0, 0, DrawEffects);
-}
-
-void SSCADAPolygon::DrawPolygonFill(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-	const TArray<FVector2D>& Vertices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const
-{
-	TArray<int32> Triangles;
-	if (!SCADAStroke::TriangulateEarClipping(Vertices, Triangles))
-	{
-		return; // 三角化失败：静默跳过，只画边框
-	}
-	DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, Vertices, Triangles, InColor, DrawEffects);
+	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, IdentityIndices, nullptr, 0, 0, DrawEffects);
 }
 
 bool SSCADAPolygon::BuildOffsetContour(const TArray<FVector2D>& Poly, float OffsetDistance, TArray<FVector2D>& OutClosedRing) const

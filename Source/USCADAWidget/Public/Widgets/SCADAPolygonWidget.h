@@ -176,6 +176,17 @@ private:
 	 *  NotifyContentSlotGeometryChanged → ForceSyncFromSlotRect 置位；撤销/编译等后台重写
 	 *  走事务序列化（不经通知通道）无授权 → CheckSlotSync 拒绝映射、以数据为真值对齐槽 */
 	bool bSlotRemapAuthorized = false;
+	/** PushPointsToSlate 的复用缓冲：每次推送 Reset() 后填充，避免设计器拖动中每帧一次的新数组分配。
+	 *  Slate 层 SetPoints 接收 TAttribute<TArray<FVector2D>> 按值拷贝存储，缓冲复用无悬垂风险 */
+	TArray<FVector2D> PointsScratch;
+
+	/** 点位数据版本号：Points 每次被写入时递增（SnapPropertiesToPixel / TranslateGeometryBy /
+	 *  CheckSlotSync 槽映射循环；面板编辑与撤销/重做经 PostEditChangeProperty → SnapPropertiesToPixel
+	 *  覆盖——引擎路径 FTransaction::Apply → PostEditUndo → PostEditChange → PostEditChangeProperty） */
+	uint32 PointsVersion = 1;
+	/** 已确认"数据包围盒 == 槽缓存"时的点位版本号：稳态失配自愈分支据此 O(1) 短路，
+	 *  版本未变即跳过 O(N) 包围盒遍历 */
+	uint32 BoundsVerifiedPointsVersion = 0;
 	/** 核心 Ticker 句柄（EnsureCoreTicker 注册，BeginDestroy 注销） */
 	FTSTicker::FDelegateHandle CoreTickerHandle;
 

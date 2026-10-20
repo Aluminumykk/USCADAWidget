@@ -110,13 +110,15 @@ void USCADAPolylineWidget::PushPointsToSlate()
 			SlotPos = CanvasSlot->GetPosition();
 		}
 
-		TArray<FVector2D> LocalPoints;
-		LocalPoints.Reserve(Points.Num());
+		// 复用成员缓冲，避免设计器拖动中每帧一次的新数组分配；
+		// Slate 层 SetPoints(TAttribute) 按值拷贝存储，缓冲复用无悬垂风险
+		PointsScratch.Reset();
+		PointsScratch.Reserve(Points.Num());
 		for (const FVector2D& P : Points)
 		{
-			LocalPoints.Add(P - SlotPos);
+			PointsScratch.Add(P - SlotPos);
 		}
-		MyPolyline->SetPoints(LocalPoints);
+		MyPolyline->SetPoints(PointsScratch);
 	}
 }
 
@@ -128,6 +130,9 @@ void USCADAPolylineWidget::SnapPropertiesToPixel()
 		P.Y = FMath::RoundToFloat(P.Y);
 	}
 	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 1.0f);
+	// 点位版本号递增：本函数覆盖 SetPoints/AddPoint/RemovePointAtIndex/PostEditChangeProperty
+	// （含撤销/重做经 PostEditUndo → PostEditChange → PostEditChangeProperty 的通知路径）的全部写入
+	++PointsVersion;
 }
 
 void USCADAPolylineWidget::GetPointsBounds(FVector2D& OutMin, FVector2D& OutMax) const
@@ -164,6 +169,7 @@ void USCADAPolylineWidget::TranslateGeometryBy(const FVector2D& Delta)
 	{
 		P += Delta;
 	}
+	++PointsVersion;
 }
 
 void USCADAPolylineWidget::SyncSlotFromPoints()
@@ -191,6 +197,8 @@ void USCADAPolylineWidget::SyncSlotFromPoints()
 	CachedSlotPos = Min;
 	CachedSlotSize = Size;
 	bSlotCacheValid = true;
+	// 此刻数据包围盒 == 槽缓存：记录已验证版本，稳态失配自愈分支据此 O(1) 短路
+	BoundsVerifiedPointsVersion = PointsVersion;
 	// 点位为真值：任何正向同步都复位交互簿记（符号基线/收尾标记）
 	bPrevRawNegX = false;
 	bPrevRawNegY = false;
@@ -291,12 +299,22 @@ void USCADAPolylineWidget::CheckSlotSync()
 			// 失配自愈：撤销/后台恢复只还原了数据或槽的一边时（槽=缓存=拖拽后、
 			// 数据=拖拽前），数据包围盒与缓存不一致 → 以数据为真值对齐槽，
 			// 防止错位的槽被后续交互当成基准。
-			FVector2D BoundsMin, BoundsMax;
-			GetPointsBounds(BoundsMin, BoundsMax);
-			const FVector2D BoundsSize(FMath::Max(BoundsMax.X - BoundsMin.X, 1.0), FMath::Max(BoundsMax.Y - BoundsMin.Y, 1.0));
-			if (!BoundsMin.Equals(CachedSlotPos) || !BoundsSize.Equals(CachedSlotSize))
+			// 廉价短路：点位版本号未变则数据包围盒必与上次确认时一致，跳过 O(N) 包围盒遍历
+			// （Points 的所有写入路径——内部方法/面板编辑/撤销重做通知——都会递增版本号）
+			if (PointsVersion != BoundsVerifiedPointsVersion)
 			{
-				SyncSlotFromPoints();
+				FVector2D BoundsMin, BoundsMax;
+				GetPointsBounds(BoundsMin, BoundsMax);
+				const FVector2D BoundsSize(FMath::Max(BoundsMax.X - BoundsMin.X, 1.0), FMath::Max(BoundsMax.Y - BoundsMin.Y, 1.0));
+				if (!BoundsMin.Equals(CachedSlotPos) || !BoundsSize.Equals(CachedSlotSize))
+				{
+					SyncSlotFromPoints();
+				}
+				else
+				{
+					// 一致：记录已验证版本（失配路径由 SyncSlotFromPoints 内部记录）
+					BoundsVerifiedPointsVersion = PointsVersion;
+				}
 			}
 		}
 		return;
@@ -412,6 +430,9 @@ void USCADAPolylineWidget::CheckSlotSync()
 			P.Y = CPos.Y + (CSize.Y - (P.Y - CPos.Y));
 		}
 	}
+
+	// 槽映射改写了点位：递增版本号（稳态失配自愈分支的短路判据）
+	++PointsVersion;
 
 	// 槽写回正向规范矩形（设计器下一帧会覆盖；始终以缓存判定新输入）
 	{

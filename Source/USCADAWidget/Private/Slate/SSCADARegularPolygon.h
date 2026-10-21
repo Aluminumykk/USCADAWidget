@@ -36,6 +36,10 @@ protected:
 	/** 正多边形不是圆：禁用父类正圆 SDF 解析快速路径，恒走采样多边形管线 */
 	virtual bool TryGetAnalyticBox(FAnalyticBox& OutBox) const override { return false; }
 
+	/** 稀疏顶点（N 个真顶点）：恢复整体轮廓圆角化（父类椭圆对密集采样点列关闭了它）——
+	 *  正三角形等的拐角因此获得与 Line/Polyline 包络一致的圆弧过渡 */
+	virtual float GetBorderCornerArcRadius() const override { return SCADAStroke::CornerArcRadius; }
+
 	/** 边数少（三角形等直边图形）顶点取整更利落；边数多（近似圆）按平滑曲线免取整 */
 	virtual bool PaintsSmoothContour() const override { return Sides >= 8; }
 

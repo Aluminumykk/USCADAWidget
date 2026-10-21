@@ -116,9 +116,41 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 			C.Poly[i] = bSmoothContourActive ? RawPoints[i] : SCADAStroke::SnapToPixel(RawPoints[i]);
 		}
 
-		// 闭合点列：原始点按序 + 首点回接（缓存结果即闭口环，覆层直接用，不再每帧拷贝）
-		C.Closed = C.Poly;
-		C.Closed.Add(C.Poly[0]);
+		// 整体轮廓圆角化（drawio rounded 语义，钩子控制；椭圆/矩形等密集采样子类返回 0 跳过）。
+		// 有效半径抬到 ≥ 线宽：实线环带内环 = 外环内缩 T，弧段内缘半径 = R-T ≥ 0 才不会
+		// 越过弧心翻转（粗边框场景）；细边框时保持 CornerArcRadius 的恒定观感。
+		// 填充、实线环带、虚线中心线随后全部基于圆角化轮廓（C.OuterRing/C.Closed）。
+		const float CornerArcR = GetBorderCornerArcRadius();
+		if (CornerArcR > KINDA_SMALL_NUMBER && C.Poly.Num() >= 3)
+		{
+			// 闭环圆角化：从首边中点 M 出发重组开环（M, P1..Pn-1, M）——BuildRoundedPolyline
+			// 不圆首/末点，M 与首边共线无拐角，因此所有原始顶点都成为内部点被圆角化
+			const float EffectiveR = FMath::Max(CornerArcR, C.KeyThickness);
+			const FVector2D M = (C.Poly[0] + C.Poly[1]) * 0.5f;
+			TArray<FVector2D> Loop;
+			Loop.Reserve(C.Poly.Num() + 1);
+			Loop.Add(M);
+			for (int32 i = 1; i < C.Poly.Num(); ++i)
+			{
+				Loop.Add(C.Poly[i]);
+			}
+			Loop.Add(M);
+			BuildRoundedPolyline(Loop, EffectiveR, C.OuterRing);
+			// 去掉重复末点（BuildOffsetContour 输入约定 = 未闭合点列；首点 M 保留——
+			// 它在边上而非拐角，内缩斜接在共线处天然稳定）
+			if (C.OuterRing.Num() > 1)
+			{
+				C.OuterRing.Pop();
+			}
+		}
+		else
+		{
+			C.OuterRing = C.Poly;
+		}
+
+		// 闭合点列：外环按序 + 首点回接（缓存结果即闭口环，覆层直接用，不再每帧拷贝）
+		C.Closed = C.OuterRing;
+		C.Closed.Add(C.OuterRing[0]);
 
 		C.bFillComputed = false;
 		C.bBandComputed = false;
@@ -172,23 +204,24 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 		++LayerId; // 边框层：严格高于填充层
 		if (CurLineStyle == ESCADALineStyle::Solid)
 		{
-			// 实心边框 = 环带四边形条带（不做耳切）：外环 = 原始轮廓（尖角精确到几何
-			// 顶点），内环 = 内缩 T 的轮廓；逐边两个三角形（外边缘 i→j + 内边缘 j→i），
-			// 相邻四边形共享边、零缝隙、无失败模式。注意**不能**把"外环正向 + 内环倒序"
-			// 拼成单环多边形做耳切——单桥接的环带在闭合边那一侧根本没被围进多边形
-			// （最后一段环带丢失）；描边方案在尖角处靠圆盘/斜接拐弯也盖不住角尖。
+			// 实心边框 = 环带四边形条带（不做耳切）：外环 = 圆角化轮廓（稀疏顶点图元已在
+			// 缓存重建时做拐角圆弧替换；密集采样子类 = 原始轮廓），内环 = 外环内缩 T 的轮廓；
+			// 逐边两个三角形（外边缘 i→j + 内边缘 j→i），相邻四边形共享边、零缝隙、无失败
+			// 模式。注意**不能**把"外环正向 + 内环倒序"拼成单环多边形做耳切——单桥接的环带
+			// 在闭合边那一侧根本没被围进多边形（最后一段环带丢失）；描边方案在尖角处靠圆盘/
+			// 斜接拐弯也盖不住角尖。
 			if (!C.bBandComputed)
 			{
 				C.bBandComputed = true;
-				C.bBandValid = BuildOffsetContour(C.Poly, LineThickness, C.InnerRing);
+				C.bBandValid = BuildOffsetContour(C.OuterRing, LineThickness, C.InnerRing);
 				if (C.bBandValid)
 				{
-					const int32 N = C.Poly.Num();
+					const int32 N = C.OuterRing.Num();
 					TArray<FVector2D> BandVerts;
 					BandVerts.Reserve(2 * N);
 					for (int32 i = 0; i < N; ++i)
 					{
-						BandVerts.Add(C.Poly[i]);
+						BandVerts.Add(C.OuterRing[i]);
 					}
 					for (int32 i = 0; i < N; ++i)
 					{
@@ -219,7 +252,7 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 			{
 				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.BandTriVerts, C.BandIdentityIndices, BorderFinalColor, DrawEffects);
 
-				// 环带外缘抗锯齿覆层：沿外轮廓（原始轮廓）覆一条 3 屏幕像素宽的同色
+				// 环带外缘抗锯齿覆层：沿外环（圆角化轮廓）覆一条 3 屏幕像素宽的同色
 				//（边框色）闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），
 				// 补偿 CustomVerts 无抗锯齿，把外包络换成渐变边。
 				DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.Closed, BorderFinalColor, DrawEffects);
@@ -241,7 +274,7 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 			{
 				C.bDashComputed = true;
 				TArray<FVector2D> Ring;
-				C.bDashValid = BuildOffsetContour(C.Poly, LineThickness * 0.5f, Ring);
+				C.bDashValid = BuildOffsetContour(C.OuterRing, LineThickness * 0.5f, Ring);
 				if (C.bDashValid)
 				{
 					const FVector2D M = (Ring[0] + Ring[1]) * 0.5f;

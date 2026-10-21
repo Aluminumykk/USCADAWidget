@@ -183,9 +183,8 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 			if (TrimStart > 0.f) { Body[0] = C.Centerline[0] + (C.Centerline[1] - C.Centerline[0]).GetSafeNormal() * FMath::Max(TrimStart - ArrowOverlap, 0.0f); }
 			if (TrimEnd > 0.f) { const int32 N = Body.Num(); Body[N - 1] = C.Centerline.Last() + (C.Centerline[C.Centerline.Num() - 2] - C.Centerline.Last()).GetSafeNormal() * FMath::Max(TrimEnd - ArrowOverlap, 0.0f); }
 
-			static constexpr float CornerArcRadius = 10.0f; // 同 drawio LINE_ARCSIZE/2；将来可做成"圆角半径"暴露属性（drawio arcSize 语义）
 			TArray<FVector2D> RoundedBody;
-			BuildRoundedPolyline(Body, CornerArcRadius, RoundedBody);
+			BuildRoundedPolyline(Body, SCADAStroke::CornerArcRadius, RoundedBody);
 
 			C.bEnvelopeValid = (LineThickness > KINDA_SMALL_NUMBER)
 				&& SCADAStroke::BuildStrokeOutline(RoundedBody, LineThickness * 0.5f, C.EnvelopeClosed);

@@ -55,8 +55,9 @@ private:
 	/** 顶点新值写入指定实例（走公开 Set 接口：取整 + 槽同步 + Slate 推送） */
 	void SetVertexOnInstance(UWidget* Widget, int32 Index, const FVector2D& NewDesignPos) const;
 
-	/** 画布 Zoom（父控件为 SCADA Canvas 时取其 Zoom，否则按 1） */
-	float GetCanvasZoom() const;
+	/** 画布生效缩放（父控件为 SCADA Canvas 时取 GetEffectiveCanvasScale 逐轴值——自动缩放模式下
+	 *  与 Zoom 属性不同；取不到时按 (1,1)） */
+	FVector2D GetCanvasScale() const;
 	/** 选中图元的父（画布）控件几何 */
 	bool GetParentGeometry(FGeometry& OutGeometry) const;
 	/** 画布设计坐标 → 设计器表面 Offset（RelativeFromParent 原点 = 画布左上角） */

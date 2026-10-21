@@ -168,16 +168,17 @@ void FSCADAVertexDragExtension::SetVertexOnInstance(UWidget* Widget, int32 Index
 	}
 }
 
-float FSCADAVertexDragExtension::GetCanvasZoom() const
+FVector2D FSCADAVertexDragExtension::GetCanvasScale() const
 {
 	if (const UWidget* Preview = GetPreviewWidget())
 	{
 		if (const USCADACanvasWidget* Canvas = Cast<USCADACanvasWidget>(Preview->GetParent()))
 		{
-			return FMath::Max(Canvas->Zoom, 0.01f);
+			const FVector2D Scale = Canvas->GetEffectiveCanvasScale();
+			return FVector2D(FMath::Max(Scale.X, 0.01), FMath::Max(Scale.Y, 0.01));
 		}
 	}
-	return 1.0f;
+	return FVector2D(1.0, 1.0);
 }
 
 bool FSCADAVertexDragExtension::GetParentGeometry(FGeometry& OutGeometry) const
@@ -194,12 +195,12 @@ FVector2D FSCADAVertexDragExtension::DesignToHandleOffset(const FVector2D& Desig
 		return FVector2D::ZeroVector;
 	}
 
-	// 画布设计坐标 P → 画布本地坐标 P*Zoom（SSCADACanvas 以 MakeChild(FScale2f(Zoom)) 排布子内容），
-	// 再换算到设计器表面坐标（与 SDesignerView::GetExtensionPosition 的 RelativeFromParent 同一空间：
-	// FinalPosition = DesignerLocal(画布原点) + Offset）。减去半个手柄尺寸使手柄居中于顶点。
-	const float Zoom = GetCanvasZoom();
+	// 画布设计坐标 P → 画布本地坐标 P*Scale（SSCADACanvas 以 MakeChild(FScale2f(Scale)) 排布子内容，
+	// 自动缩放模式下逐轴），再换算到设计器表面坐标（与 SDesignerView::GetExtensionPosition 的
+	// RelativeFromParent 同一空间：FinalPosition = DesignerLocal(画布原点) + Offset）。减去半个手柄尺寸使手柄居中于顶点。
+	const FVector2D Scale = GetCanvasScale();
 	const FGeometry DesignerGeometry = Designer->GetDesignerGeometry();
-	const FVector2D VertexAbsolute = ParentGeometry.LocalToAbsolute(DesignPos * Zoom);
+	const FVector2D VertexAbsolute = ParentGeometry.LocalToAbsolute(DesignPos * Scale);
 	const FVector2D OriginAbsolute = ParentGeometry.LocalToAbsolute(FVector2D::ZeroVector);
 	return DesignerGeometry.AbsoluteToLocal(VertexAbsolute) - DesignerGeometry.AbsoluteToLocal(OriginAbsolute)
 		- FVector2D(HandleSize * 0.5, HandleSize * 0.5);
@@ -212,7 +213,7 @@ FVector2D FSCADAVertexDragExtension::ScreenToDesign(const FVector2D& ScreenPos) 
 	{
 		return FVector2D::ZeroVector;
 	}
-	return ParentGeometry.AbsoluteToLocal(ScreenPos) / GetCanvasZoom();
+	return ParentGeometry.AbsoluteToLocal(ScreenPos) / GetCanvasScale();
 }
 
 FVector2D FSCADAVertexDragExtension::GetHandleOffset(int32 Index) const

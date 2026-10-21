@@ -45,3 +45,17 @@ enum class ESCADAFillPattern : uint8
 	/** 透明（不填充，只画边框） */
 	Transparent UMETA(DisplayName = "透明 Transparent")
 };
+
+/** 画布缩放模式（分辨率自适应）：以 CanvasSize 为设计基准，按实际分配尺寸自动算缩放系数 */
+UENUM(BlueprintType)
+enum class ESCADACanvasScaleMode : uint8
+{
+	/** 不自动缩放：使用手动 Zoom 系数（默认，旧行为） */
+	None    UMETA(DisplayName = "无（手动 Zoom） None"),
+	/** 等比缩放，设计区域完整显示在可视区域内（可能留白边） */
+	Fit     UMETA(DisplayName = "等比适应 Fit"),
+	/** 等比缩放填满可视区域（超出部分被裁切） */
+	Fill    UMETA(DisplayName = "等比填满 Fill"),
+	/** 非等比拉伸铺满可视区域：0,0→CanvasSize 恒等于可视区域四角（画面比例可能变形） */
+	Stretch UMETA(DisplayName = "拉伸铺满 Stretch")
+};

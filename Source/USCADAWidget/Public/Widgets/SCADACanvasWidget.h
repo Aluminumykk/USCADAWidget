@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SCADAWidgetTypes.h"
 #include "Components/CanvasPanel.h"
 #include "SCADACanvasWidget.generated.h"
 
@@ -39,9 +40,21 @@ public:
 	FLinearColor GridColor = FLinearColor(1.f, 1.f, 1.f, 0.08f);
 
 	/** 缩放系数：以左上角为原点对画布全部子内容整体渲染缩放（含网格密度）。
-	 *  跨平台/分辨率适配只调这里，图元内部坐标不变；线宽已按缩放自动补偿。 */
+	 *  跨平台/分辨率适配只调这里，图元内部坐标不变；线宽已按缩放自动补偿。
+	 *  注意：ScaleMode ≠ None 时本属性被忽略（缩放由 CanvasSize × 实际尺寸自动计算）。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Canvas", meta = (ClampMin = "0.1"))
 	float Zoom = 1.0f;
+
+	/** 画布设计尺寸：ScaleMode ≠ None 时的缩放基准。设计时按此坐标系画图（如 1920×1080），
+	 *  运行时无论窗口实际多大，0,0→CanvasSize 都映射到可视区域（Fit 等比留边 / Stretch 拉伸铺满）。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Canvas", meta = (ClampMin = "1.0", Delta = "1.0", LinearDeltaSensitivity = "1"))
+	FVector2D CanvasSize = FVector2D(1920.0, 1080.0);
+
+	/** 缩放模式（分辨率自适应）：None = 手动 Zoom（默认，旧行为）；Fit = 等比完整显示（可能留边）；
+	 *  Fill = 等比填满（可能裁切）；Stretch = 非等比铺满（设计区域恒等于可视区域，比例可能变形）。
+	 *  非 None 时忽略 Zoom。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Canvas")
+	ESCADACanvasScaleMode ScaleMode = ESCADACanvasScaleMode::None;
 
 	// AddChildToCanvas 直接用基类版本：内部走虚函数 GetSlotClass() → USCADACanvasSlot，行为一致
 
@@ -56,6 +69,17 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Canvas")
 	void SetZoom(float InZoom);
+
+	UFUNCTION(BlueprintCallable, Category = "SCADA|Canvas")
+	void SetCanvasSize(FVector2D InSize);
+
+	UFUNCTION(BlueprintCallable, Category = "SCADA|Canvas")
+	void SetScaleMode(ESCADACanvasScaleMode InMode);
+
+	/** 当前实际生效的缩放系数（逐轴）：None = Zoom；Fit/Fill/Stretch = 按 CanvasSize ×
+	 *  实际分配尺寸自动计算。未排布过时返回 Zoom。坐标换算（鼠标→设计坐标）应使用本值。 */
+	UFUNCTION(BlueprintPure, Category = "SCADA|Canvas")
+	FVector2D GetEffectiveCanvasScale() const;
 
 protected:
 	//~ UPanelWidget

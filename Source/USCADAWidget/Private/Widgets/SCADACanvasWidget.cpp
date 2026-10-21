@@ -49,6 +49,33 @@ void USCADACanvasWidget::SetZoom(float InZoom)
 	}
 }
 
+void USCADACanvasWidget::SetCanvasSize(FVector2D InSize)
+{
+	CanvasSize = InSize;
+	if (TSharedPtr<SSCADACanvas> Canvas = GetSCADACanvas())
+	{
+		Canvas->SetDesignSize(CanvasSize);
+	}
+}
+
+void USCADACanvasWidget::SetScaleMode(ESCADACanvasScaleMode InMode)
+{
+	ScaleMode = InMode;
+	if (TSharedPtr<SSCADACanvas> Canvas = GetSCADACanvas())
+	{
+		Canvas->SetScaleMode(ScaleMode);
+	}
+}
+
+FVector2D USCADACanvasWidget::GetEffectiveCanvasScale() const
+{
+	if (TSharedPtr<SSCADACanvas> Canvas = GetSCADACanvas())
+	{
+		return Canvas->GetLastEffectiveScale();
+	}
+	return FVector2D(FMath::Max(Zoom, 0.01f));
+}
+
 UClass* USCADACanvasWidget::GetSlotClass() const
 {
 	return USCADACanvasSlot::StaticClass();
@@ -84,6 +111,8 @@ void USCADACanvasWidget::SynchronizeProperties()
 		Canvas->SetGridSize(GridSize);
 		Canvas->SetGridColor(GridColor);
 		Canvas->SetZoom(Zoom);
+		Canvas->SetDesignSize(CanvasSize);
+		Canvas->SetScaleMode(ScaleMode);
 	}
 }
 

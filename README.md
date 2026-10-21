@@ -103,6 +103,16 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 4. 选中折线/多边形/线段后，直接拖动画布上的顶点手柄微调形状；在细节面板数组里 `+`/Insert 增点会自动落在合理位置（延长线 / 边中点）。
 5. 需要分辨率自适应时：画布 `CanvasSize` 设为设计分辨率（默认 1920×1080），`ScaleMode` 选 `Fit`（等比不变形）或 `Stretch`（设计区域精确铺满可视区域）——窗口化、非设计分辨率运行时整幅画面自动缩放；`GetEffectiveCanvasScale()` 可取当前生效缩放系数。
 
+## SVG 导入（元件制作）
+
+把 `.svg` 文件**拖入内容浏览器**（或右键 Import），即生成一个 Widget Blueprint 元件资产：内部 = SCADA Canvas（`CanvasSize` = viewBox 尺寸、`ScaleMode` = Fit，任意尺寸使用等比缩放）+ 按 SVG 文档顺序生成的图元树。每个图元是活控件——可单独改属性、加属性绑定、用 UMG Animation 驱动（带 `transform="rotate(a,cx,cy)"` 的分组会生成命名子画布并设好 Pivot，直接驱动 RenderTransformAngle 即可做泵叶轮等旋转动画）。
+
+支持的 SVG 子集（P0）：
+
+- 元素：`rect` / `circle` / `ellipse` / `line` / `polyline` / `polygon` / `g`（分组，仅 `rotate` 变换）；样式 `fill` / `stroke` / `stroke-width` / `fill-opacity` / `stroke-opacity`（沿组继承）
+- 颜色：`#RGB` / `#RRGGBB` / `rgb()` / 常用命名色；`linearGradient` / `radialGradient` 近似为加权平均纯色（真渐变规划中）
+- 暂不支持：`<path>` 贝塞尔、`<text>`、内联 `style` 属性、组 `translate`/`scale`/`matrix` 变换——不支持的项会跳过并在输出日志（LogSCADASvg）给出警告
+
 ## 目录结构
 
 ```
@@ -113,7 +123,7 @@ Source/
 │   │   ├── Slate/            # 底层 SWidget（Canvas / Line / Polygon / Ellipse / Rectangle）+ 共享笔画几何工具 SCADAStrokeGeometry.h（笔画包络构造、耳切三角化，Line/Polygon 共用）
 │   │   └── Widgets/          # UMG 层控件（Canvas / Line / Polyline / Polygon / Ellipse / Circle / Rectangle / Text / 槽）
 │   └── Private/              # 对应实现
-└── USCADAWidgetEditor/       # Editor 模块：设计器顶点拖动手柄扩展（FDesignerExtension）
+└── USCADAWidgetEditor/       # Editor 模块：设计器顶点拖动手柄扩展（FDesignerExtension）+ SVG 导入工厂（Private/SvgImport/：.svg → SCADA 图元 Widget Blueprint 资产，内容浏览器拖拽触发）
 ```
 
 ## 后续规划

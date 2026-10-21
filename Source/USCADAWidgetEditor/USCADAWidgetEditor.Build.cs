@@ -22,6 +22,8 @@ public class USCADAWidgetEditor : ModuleRules
 			"InputCore",
 			"UMG",
 			"UMGEditor",
+			"UnrealEd",
+			"XmlParser",
 			"USCADAWidget"
 		});
 	}

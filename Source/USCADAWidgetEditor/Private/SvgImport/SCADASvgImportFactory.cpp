@@ -218,14 +218,16 @@ namespace SCADASvgImport
 		}
 	}
 
-	/** 文档 → WidgetTree：根 = SCADA 画布（CanvasSize = viewBox，ScaleMode = Fit——元件在父画面
-	 *  任意槽尺寸下内容等比缩放），SVG 文档顺序 = 添加顺序（后者在上层） */
+	/** 文档 → WidgetTree：根 = SCADA 画布（CanvasSize = viewBox 尺寸——"SVG 原始大小"的记录，
+	 *  也是手动开启 Fit/Stretch 时的缩放基准；ScaleMode 默认 None：内容按 viewBox 坐标 1:1
+	 *  画在槽左上角，符合元件"按原始尺寸放置、放大由使用者显式控制"的直觉），
+	 *  SVG 文档顺序 = 添加顺序（后者在上层） */
 	static void BuildWidgetTree(UWidgetTree* WidgetTree, const FSCADASvgDocument& Doc)
 	{
 		USCADACanvasWidget* RootCanvas = WidgetTree->ConstructWidget<USCADACanvasWidget>(
 			USCADACanvasWidget::StaticClass(), TEXT("SCADACanvas"));
 		RootCanvas->CanvasSize = Doc.ViewBoxSize;
-		RootCanvas->ScaleMode = ESCADACanvasScaleMode::Fit;
+		RootCanvas->ScaleMode = ESCADACanvasScaleMode::None;
 		RootCanvas->bShowGrid = false;
 		WidgetTree->RootWidget = RootCanvas;
 

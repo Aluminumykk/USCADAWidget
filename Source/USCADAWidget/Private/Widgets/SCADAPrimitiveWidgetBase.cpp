@@ -84,6 +84,17 @@ void USCADAPrimitiveWidgetBase::SyncSlotFromGeometry()
 
 	TGuardValue<bool> Guard(bSyncingGeometry, true);
 
+	// 锚点强制左上角（双保险，含运行时 Rebuild/Synchronize 路径）：不变式"槽矩形 = 数据包围盒
+	// （设计坐标）"只在左上角锚点下成立；非左上角锚点的槽位置是锚点相对偏移且随画布尺寸漂移。
+	// 值相同则 Set 内部无实质写入，稳态零成本。
+	const FAnchors CurAnchors = CanvasSlot->GetAnchors();
+	if (CurAnchors.Minimum != FVector2D::ZeroVector || CurAnchors.Maximum != FVector2D::ZeroVector
+		|| !CanvasSlot->GetAlignment().IsNearlyZero())
+	{
+		CanvasSlot->SetAnchors(FAnchors(0.f, 0.f));
+		CanvasSlot->SetAlignment(FVector2D::ZeroVector);
+	}
+
 	// 槽矩形 = 几何数据包围盒（min 位置 + 正尺寸，尺寸下限 1 防退化）
 	FVector2D Min, Max;
 	GetGeometryBounds(Min, Max);
@@ -132,6 +143,19 @@ void USCADAPrimitiveWidgetBase::CheckSlotSync()
 	if (!CanvasSlot)
 	{
 		return;
+	}
+
+	// 锚点强制左上角（编辑器交互通道：用户在设计器改锚点/对齐，面板或 gizmo 均经槽属性通知
+	// 到达本函数）：非左上角锚点的槽位置是锚点相对偏移、随画布尺寸漂移，绝不是合法映射输入
+	// ——必须在读取/映射之前拦截，以数据为真值重写槽（SyncSlotFromGeometry 内含锚点复位），绝不映射。
+	{
+		const FAnchors CurAnchors = CanvasSlot->GetAnchors();
+		if (CurAnchors.Minimum != FVector2D::ZeroVector || CurAnchors.Maximum != FVector2D::ZeroVector
+			|| !CanvasSlot->GetAlignment().IsNearlyZero())
+		{
+			SyncSlotFromGeometry();
+			return;
+		}
 	}
 
 	const FVector2D RawPos = CanvasSlot->GetPosition();

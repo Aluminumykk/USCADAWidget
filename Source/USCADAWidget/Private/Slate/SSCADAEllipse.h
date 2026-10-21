@@ -48,11 +48,10 @@ protected:
 	/** 椭圆轮廓是曲线：绘制层不做整数取整（见基类说明） */
 	virtual bool PaintsSmoothContour() const override { return true; }
 
-private:
-	/** 按当前半径/本地中心重采样椭圆周点列并写入 Points */
-	void ResamplePerimeter();
+	/** 按当前半径/本地中心重采样椭圆周点列并写入 Points（正多边形子类重写为正 N 边形顶点生成） */
+	virtual void ResamplePerimeter();
 
-private:
+	// 正多边形子类（SSCADARegularPolygon）重采样需读取，放宽为 protected
 	float RadiusX = 50.0f;
 	float RadiusY = 30.0f;
 	/** 本地中心（默认跟随半径 = 槽左上角锚定；SetLocalCenter 后变为显式指定） */

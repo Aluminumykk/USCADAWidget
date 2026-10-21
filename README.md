@@ -11,7 +11,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - **分辨率自适应（`CanvasSize` + `ScaleMode`）**：按设计尺寸（默认 1920×1080）画图，运行时无论窗口/分辨率如何自动缩放整幅画面——`Fit` 等比完整显示（可能留边）、`Fill` 等比填满（超出裁切）、`Stretch` 非等比铺满（`0,0→CanvasSize` 恒等于可视区域四角，比例可变形）。位置、线宽、圆角、箭头全部等比跟随，图元内部坐标不变；`None`（默认）= 手动 `Zoom`（旧行为，已存资产无影响）。
 - 手动 `Zoom`：以左上角为原点对子内容整体渲染缩放（ScaleMode ≠ None 时忽略）。
 - 可选设计网格（`bShowGrid` / `GridSize` / `GridColor`），网格密度随生效缩放自适应。
-- 自定义槽 `USCADACanvasSlot`：保留 UMG 设计器自由拖动/拉伸/锚点，槽变化实时回写图元真实资产实例（设计器拖动只写槽，不回写会保存后丢数据）；方向键微调固定 1px 步进。锚点对原生 UMG 控件正常生效；对 SCADA 图元只动槽不改绘制内容（图元以几何数据为真值，槽→数据映射仅编辑器设计器激活），整幅画适配请用 ScaleMode。
+- 自定义槽 `USCADACanvasSlot`：保留 UMG 设计器自由拖动/拉伸/锚点，槽变化实时回写图元真实资产实例（设计器拖动只写槽，不回写会保存后丢数据）；方向键微调固定 1px 步进。**SCADA 图元的槽锚点固定左上角**（设置其它锚点会被自动重置——图元以几何数据为真值，锚点相对坐标与该模型不兼容）；锚点仅对原生 UMG 控件（Text/Image 等）有意义，整幅画分辨率适配请用 ScaleMode。
 
 ### SCADA Line（直线）
 
@@ -45,6 +45,12 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 
 - `Center` / `Radius`，边框与填充属性同椭圆。
 - WinCC 语义拖拽：拖边 = 对边中心固定，拖角 = 对角固定，翻边自动镜像。
+
+### SCADA Regular Polygon（正多边形）
+
+- `Center` / `Radius`（外接圆半径）+ `Sides`（边数 3~64）+ `StartAngle`（起始角，-90 = 顶点朝上）；边框与填充属性同圆。
+- 槽包围盒中心恒等于几何中心：设 RenderTransform Pivot(0.5,0.5) 后**绕几何中心旋转零晃动**，配合 RenderTransformAngle 做泵叶轮/风扇等旋转动画。
+- 拖拽行为与圆一致；无逐顶点手柄（顶点由参数推导，不可逐点编辑）。
 
 ### SCADA Rectangle（矩形 / 圆角矩形）
 
@@ -92,7 +98,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 ## 使用
 
 1. 在 UMG 设计器中搜索 `SCADA Canvas` 放入画布，作为所有图元的容器。
-2. 向 Canvas 中添加 `SCADA Line` / `SCADA Polyline` / `SCADA Polygon` / `SCADA Ellipse` / `SCADA Circle` / `SCADA Rectangle` / `SCADA Text`。
+2. 向 Canvas 中添加 `SCADA Line` / `SCADA Polyline` / `SCADA Polygon` / `SCADA Ellipse` / `SCADA Circle` / `SCADA Regular Polygon` / `SCADA Rectangle` / `SCADA Text`。
 3. 直接拖动/拉伸图元（支持拖过对边翻转、方向键微调），或在属性面板编辑坐标、线宽、颜色、线型、填充、闪烁等属性。
 4. 选中折线/多边形/线段后，直接拖动画布上的顶点手柄微调形状；在细节面板数组里 `+`/Insert 增点会自动落在合理位置（延长线 / 边中点）。
 5. 需要分辨率自适应时：画布 `CanvasSize` 设为设计分辨率（默认 1920×1080），`ScaleMode` 选 `Fit`（等比不变形）或 `Stretch`（设计区域精确铺满可视区域）——窗口化、非设计分辨率运行时整幅画面自动缩放；`GetEffectiveCanvasScale()` 可取当前生效缩放系数。

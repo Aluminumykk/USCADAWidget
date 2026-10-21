@@ -23,11 +23,6 @@
  */
 namespace SCADAStroke
 {
-	/** 拐角圆角半径（设计坐标像素，drawio LINE_ARCSIZE/2 = 10；与线宽无关，drawio rounded
-	 *  语义；随渲染缩放视觉等比）。将来可做成"圆角半径"暴露属性（drawio arcSize 语义）。
-	 *  Line/Polyline 实线包络的中心线圆角、多边形族的整体轮廓圆角共用此值。 */
-	inline constexpr float CornerArcRadius = 10.0f;
-
 	/** 像素对齐：四舍五入到就近整数坐标 */
 	inline FVector2D SnapToPixel(const FVector2D& P)
 	{

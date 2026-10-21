@@ -4,7 +4,6 @@
 
 #include "CoreMinimal.h"
 #include "Slate/SSCADALine.h"
-#include "Slate/SCADAStrokeGeometry.h"
 #include "SCADAWidgetTypes.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Rendering/RenderingCommon.h"
@@ -22,18 +21,15 @@
  *  - 填充（FillPattern=Solid）：耳切三角化（支持凹多边形）+ 一次 MakeCustomVerts 实心三角扇；
  *    三角化失败时静默跳过（只画边框）。
  *  - 边框：**内画 + 显式更高绘制层**——几何数据（Points/半径/矩形尺寸）= 外轮廓 =
- *    视觉边界 = 槽包围盒。稀疏顶点图元（普通多边形/正多边形，由 GetBorderCornerArcRadius
- *    钩子控制）的轮廓先整体做**拐角圆弧替换**（drawio rounded 语义，有效半径 = max(10px,
- *    线宽)——≥线宽保证内环弧半径不翻负），填充/实线边框/虚线全部基于圆角化轮廓。
- *    **实线边框 = 环带四边形条带**：外环 = 圆角化轮廓、内环 = 外环内缩 T 的轮廓
- *    （BuildOffsetContour 斜接偏移；弧段内缩自然成同心圆弧），逐边以两端点构成
+ *    视觉边界 = 槽包围盒。**实线边框 = 环带四边形条带**：外环 = 原始轮廓（尖角精确到
+ *    几何顶点）、内环 = 内缩 T 的轮廓（BuildOffsetContour 斜接偏移），逐边以两端点构成
  *    两个三角形（外边缘 i→j + 内边缘 j→i，DrawTriangleList 一次画出），相邻四边形共享
  *    边、零缝隙、无失败模式。**不能**拼“外环正向 + 内环倒序”的单环多边形做耳切——单
  *    桥接的环带在闭合边一侧根本没被围入多边形（最后一段环带丢失）；描边方案在尖角处靠
  *    圆盘/斜接拐弯也盖不住角尖会露出填充。填充画在 LayerId、边框整体抬到 LayerId+1（Slate 同层内
  *    MakeCustomVerts 与 MakeLines/MakeBox 合批不保证提交顺序，显式分层是严格层序）。
  *    Thickness=0 即不画边框且图形不会"少一圈"。虚线边框维持描边方案
- *    （虚线本身到处断裂，角部缺陷不显著）：外环内缩 T/2 环 + BuildRoundedPolyline +
+ *    （虚线本身到处断裂，角部缺陷不显著）：内缩 T/2 环 + BuildRoundedPolyline +
  *    BuildSegmentPoints(Trim=0) 逐段绘制，点段画旋转实心方块。
  * 闪烁只切填充色（FlashColor），边框保持本色（WinCC 语义：黑边白圆红闪 = 黑边红闪）。
  * 无箭头/端点样式。
@@ -83,15 +79,6 @@ protected:
 	 *  true（像素对齐约定对其有益）。SDF 快速路径不经过此开关。 */
 	virtual bool PaintsSmoothContour() const { return false; }
 
-	/** 实线/虚线边框与填充共用的整体轮廓圆角半径（设计坐标像素，drawio rounded 语义）：
-	 *  >0 时缓存重建先把取整后的轮廓整体做拐角圆弧替换（BuildRoundedPolyline），填充耳切、
-	 *  实线环带外环（内环 = 圆角外环内缩 T，故内外缘都是同心圆弧）、虚线中心线全部基于
-	 *  圆角化轮廓——稀疏顶点图元（普通多边形/正多边形）因此获得圆润拐角（与 Line/Polyline
-	 *  包络观感统一）；有效半径会抬到 ≥ 线宽（内环弧半径 = R-T ≥ 0，粗边框内缘不翻转）。
-	 *  密集采样周点列的子类（椭圆/矩形：角部本来平滑或已含角弧）必须重写返回 0——对采样
-	 *  点列圆角化只会点数爆炸且无视觉效果。SDF 快速路径不经过此开关。 */
-	virtual float GetBorderCornerArcRadius() const { return SCADAStroke::CornerArcRadius; }
-
 	/** SDF 填充+边框 brush（OnPaint 每次改写圆角/边框参数；本体恒白色，填充色经 MakeBox Tint 传入） */
 	mutable FSlateRoundedBoxBrush AnalyticFillBrush = FSlateRoundedBoxBrush(FLinearColor::White);
 
@@ -135,12 +122,8 @@ private:
 		ESCADALineStyle KeyLineStyle = ESCADALineStyle::Solid;
 		bool bKeySmoothContour = false;
 
-		/** 取整后的原始轮廓（未闭合，圆角化的输入；键命中判定的几何真值） */
+		/** 取整后的轮廓（未闭合，内缩偏移的输入） */
 		TArray<FVector2D> Poly;
-		/** 整体圆角化后的轮廓（未闭合）：GetBorderCornerArcRadius()>0 时为拐角圆弧替换后的
-		 *  点列（首点 = 首边中点，全部原始顶点被圆角化），否则 = Poly。填充耳切、实线环带
-		 *  外环、虚线中心线的共同几何基础 */
-		TArray<FVector2D> OuterRing;
 		/** 闭合外环（末尾回接首点）：填充三角化的输入、轮廓 AA 覆层直接用（缓存即闭口，不再每帧拷贝） */
 		TArray<FVector2D> Closed;
 

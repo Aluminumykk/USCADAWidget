@@ -48,10 +48,6 @@ protected:
 	/** 椭圆轮廓是曲线：绘制层不做整数取整（见基类说明） */
 	virtual bool PaintsSmoothContour() const override { return true; }
 
-	/** 周点列是密集采样的平滑曲线：不做整体轮廓圆角化（对采样点列圆角化只会点数爆炸；
-	 *  正多边形子类的稀疏顶点会重新打开） */
-	virtual float GetBorderCornerArcRadius() const override { return 0.0f; }
-
 	/** 按当前半径/本地中心重采样椭圆周点列并写入 Points（正多边形子类重写为正 N 边形顶点生成） */
 	virtual void ResamplePerimeter();
 

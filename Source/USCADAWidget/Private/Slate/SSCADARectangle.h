@@ -54,9 +54,6 @@ protected:
 	/** 存在椭圆角弧采样时轮廓含曲线，绘制层不做整数取整（直边端点本就是整数，不受影响） */
 	virtual bool PaintsSmoothContour() const override { return CornerRadiusX > 0.0f && CornerRadiusY > 0.0f; }
 
-	/** 周点列已含角弧采样（角部本来平滑）：不做整体轮廓圆角化 */
-	virtual float GetBorderCornerArcRadius() const override { return 0.0f; }
-
 private:
 	/** 按当前尺寸/圆角重采样周点列并写入 Points（本地空间 (0,0,Width,Height)） */
 	void ResamplePerimeter();

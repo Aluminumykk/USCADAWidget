@@ -137,6 +137,7 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 		&& C.KeyStartStyle == StartStyle
 		&& C.KeyEndStyle == EndStyle
 		&& C.KeyLineCap == CurLineCap
+		&& C.KeySkipPixelSnap == bSkipPixelSnap
 		&& C.KeyPoints == RawPolyline; // TArray 逐元素精确比较（数据层已取整，无漂移）
 	if (!bCacheHit)
 	{
@@ -146,12 +147,14 @@ int32 SSCADALine::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeome
 		C.KeyStartStyle = StartStyle;
 		C.KeyEndStyle = EndStyle;
 		C.KeyLineCap = CurLineCap;
+		C.KeySkipPixelSnap = bSkipPixelSnap;
 		C.bValid = true;
 
 		C.Centerline.SetNumUninitialized(RawPolyline.Num());
 		for (int32 i = 0; i < RawPolyline.Num(); ++i)
 		{
-			C.Centerline[i] = SCADAStroke::SnapToPixel(RawPolyline[i]);
+			// bSkipPixelSnap（SVG path 采样导入）：亚像素点列直进包络，取整会让密集顶点塌陷变形
+			C.Centerline[i] = bSkipPixelSnap ? FVector2D(RawPolyline[i]) : SCADAStroke::SnapToPixel(RawPolyline[i]);
 		}
 
 		if (CurLineStyle != ESCADALineStyle::Solid)

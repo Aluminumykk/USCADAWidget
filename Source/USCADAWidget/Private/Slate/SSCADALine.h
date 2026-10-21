@@ -57,6 +57,9 @@ public:
 	void SetFlashEnabled(const TAttribute<bool>& bInEnabled);
 	void SetFlashColor(const TAttribute<FLinearColor>& InColor);
 	void SetFlashInverted(const TAttribute<bool>& bInInverted);
+	/** 跳过中心线的 Slate 层像素取整（亚像素点列，SVG path 采样导入的小尺寸图形用；
+	 *  默认 false 保持像素对齐约定）。变更参与几何缓存键。 */
+	void SetSkipPixelSnap(bool bInSkip) { bSkipPixelSnap = bInSkip; }
 
 	/** 每帧回调（供 UMG 层轮询槽矩形变化等）。Slate 层不直接依赖 UMG。 */
 	TFunction<void()> ExternalTickCallback;
@@ -107,6 +110,8 @@ protected:
 	TAttribute<FLinearColor> FlashColor;
 	/** 相位翻转（翻转组）：true = 与全局定时器取色相反（正常相位显示闪烁色、闪烁相位显示正常色） */
 	TAttribute<bool> bFlashInverted;
+	/** true = 中心线不做 SnapToPixel（亚像素点列直进包络/划段拆分；SVG path 采样导入用） */
+	bool bSkipPixelSnap = false;
 	bool bLastFlashPhaseNormal = true;
 	float DashLength = 12.0f;
 	float GapLength = 6.0f;
@@ -126,6 +131,7 @@ private:
 		TArray<FVector2D> KeyPoints;
 		float KeyThickness = 0.0f;
 		ESCADALineStyle KeyLineStyle = ESCADALineStyle::Solid;
+		bool KeySkipPixelSnap = false;
 		ESCADALineEndStyle KeyStartStyle = ESCADALineEndStyle::None;
 		ESCADALineEndStyle KeyEndStyle = ESCADALineEndStyle::None;
 		ESCADALineCap KeyLineCap = ESCADALineCap::None;

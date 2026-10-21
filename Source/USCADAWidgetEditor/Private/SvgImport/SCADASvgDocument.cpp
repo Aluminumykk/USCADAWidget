@@ -278,11 +278,11 @@ namespace SCADASvgImport
 		return true;
 	}
 
-	/** 三次贝塞尔按近似长度自适应采样（~3px 一段），含终点、不含起点 */
+	/** 三次贝塞尔按近似长度自适应采样（~2px 一段、最短 2 段——小尺寸图标不产生点挨点的密集顶点），含终点、不含起点 */
 	static void SampleCubicBezier(const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, const FVector2D& P3, TArray<FVector2D>& Out)
 	{
 		const double ApproxLen = (P1 - P0).Size() + (P2 - P1).Size() + (P3 - P2).Size();
-		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 3.0f), 4, 64);
+		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 2.0f), 2, 64);
 		for (int32 i = 1; i <= N; ++i)
 		{
 			const double t = (double)i / N, u = 1.0 - t;
@@ -294,7 +294,7 @@ namespace SCADASvgImport
 	static void SampleQuadraticBezier(const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, TArray<FVector2D>& Out)
 	{
 		const double ApproxLen = (P1 - P0).Size() + (P2 - P1).Size();
-		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 3.0f), 4, 64);
+		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 2.0f), 2, 64);
 		for (int32 i = 1; i <= N; ++i)
 		{
 			const double t = (double)i / N, u = 1.0 - t;
@@ -351,7 +351,7 @@ namespace SCADASvgImport
 		if (bSweep && DTheta < 0.0) { DTheta += TwoPi; }
 
 		const double ApproxLen = FMath::Max(Rxd, Ryd) * FMath::Abs(DTheta);
-		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 3.0f), 4, 128);
+		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 2.0f), 2, 128);
 		for (int32 i = 1; i <= N; ++i)
 		{
 			const double T = Theta1 + DTheta * (double)i / N;
@@ -697,6 +697,7 @@ namespace SCADASvgImport
 				FSCADASvgNode Node;
 				Node.Id = Id;
 				Node.Style = Style;
+				Node.bSubPixelSampling = true;
 				// 闭合子路径或有填充 → 多边形（多边形自带边框）；仅描边的开口子路径 → 折线
 				const bool bFilled = Closed[i] || Style.Fill.IsSet();
 				Node.Kind = bFilled ? ESCADASvgNodeKind::Polygon : ESCADASvgNodeKind::Polyline;

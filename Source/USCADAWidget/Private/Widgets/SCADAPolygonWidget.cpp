@@ -37,6 +37,7 @@ void USCADAPolygonWidget::SynchronizeProperties()
 		MyPolygon->SetFlashEnabled(bFlashEnabled);
 		MyPolygon->SetFlashColor(FlashColor);
 		MyPolygon->SetFlashInverted(bFlashInverted);
+		MyPolygon->SetForceSmoothContour(!bSnapToPixel);
 	}
 
 	// 属性同步后补一次绑定检查：绑定先于本次同步应用（初始化时序）时在此完成注册；
@@ -76,10 +77,14 @@ void USCADAPolygonWidget::PushGeometryToSlate()
 
 void USCADAPolygonWidget::SnapPropertiesToPixel()
 {
-	for (FVector2D& P : Points)
+	// bSnapToPixel=false（SVG path 采样导入）：保留亚像素点位，只维护线宽规则与版本号
+	if (bSnapToPixel)
 	{
-		P.X = FMath::RoundToFloat(P.X);
-		P.Y = FMath::RoundToFloat(P.Y);
+		for (FVector2D& P : Points)
+		{
+			P.X = FMath::RoundToFloat(P.X);
+			P.Y = FMath::RoundToFloat(P.Y);
+		}
 	}
 	Thickness = FMath::Max(FMath::RoundToFloat(Thickness), 0.0f);
 	// 点位版本号递增：本函数覆盖 SetPoints/AddPoint/RemovePointAtIndex/PostEditChangeProperty

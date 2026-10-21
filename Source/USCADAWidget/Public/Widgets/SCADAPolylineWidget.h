@@ -40,6 +40,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	TArray<FVector2D> Points = { FVector2D(0.0, 100.0), FVector2D(50.0, 0.0), FVector2D(100.0, 100.0) };
 
+	/** 像素对齐：开启（默认）时点位在数据层/绘制层取整到整数像素（直线类图形边缘更锐利）；
+	 *  关闭后保留亚像素坐标——SVG path 采样导入的小尺寸图形需要（密集采样顶点取整会塌陷变形），
+	 *  导入工厂会自动为 path 生成的控件关闭本项。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline")
+	bool bSnapToPixel = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Polyline")
 	FLinearColor Color = FLinearColor::White;
 

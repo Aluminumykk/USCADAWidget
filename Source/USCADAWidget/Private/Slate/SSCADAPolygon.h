@@ -54,6 +54,10 @@ public:
 	/** 填充图案：实心 / 透明 */
 	void SetFillPattern(const TAttribute<ESCADAFillPattern>& InPattern);
 
+	/** 强制平滑轮廓（跳过 Slate 层整数取整，保留亚像素几何；SVG path 采样导入的小尺寸
+	 *  图形用——密集采样顶点取整会塌陷变形）。默认 false 保持像素对齐约定。 */
+	void SetForceSmoothContour(bool bInForce) { bForceSmoothContour = bInForce; }
+
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
 		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 
@@ -77,7 +81,11 @@ protected:
 	 *  整数取整（SnapToPixel 与 CustomVerts 顶点取整）——顶点取整会对密集采样的曲线在
 	 *  每段间引入 ~0.3px 阶梯抖动，被 1px AA 覆层放大成肉眼可见的波浪；直线类图元保持
 	 *  true（像素对齐约定对其有益）。SDF 快速路径不经过此开关。 */
-	virtual bool PaintsSmoothContour() const { return false; }
+	virtual bool PaintsSmoothContour() const { return bForceSmoothContour; }
+
+	/** 强制平滑轮廓标志（SetForceSmoothContour；子类 override 按自身几何判定，不看本标志——
+	 *  椭圆/圆角矩形等控件从不设置它） */
+	bool bForceSmoothContour = false;
 
 	/** SDF 填充+边框 brush（OnPaint 每次改写圆角/边框参数；本体恒白色，填充色经 MakeBox Tint 传入） */
 	mutable FSlateRoundedBoxBrush AnalyticFillBrush = FSlateRoundedBoxBrush(FLinearColor::White);

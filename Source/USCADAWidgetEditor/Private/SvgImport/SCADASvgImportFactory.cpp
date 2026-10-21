@@ -205,6 +205,7 @@ namespace SCADASvgImport
 			USCADAPolylineWidget* W = WidgetTree->ConstructWidget<USCADAPolylineWidget>(
 				USCADAPolylineWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Polyline"), UsedNames));
 			W->Points = Node.Points;
+			if (Node.bSubPixelSampling) { W->bSnapToPixel = false; }
 			ApplyStrokeOnlyStyle(W, Node.Style);
 			FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
 			FVector2D Max(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
@@ -226,6 +227,7 @@ namespace SCADASvgImport
 			USCADAPolygonWidget* W = WidgetTree->ConstructWidget<USCADAPolygonWidget>(
 				USCADAPolygonWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Polygon"), UsedNames));
 			W->Points = Node.Points;
+			if (Node.bSubPixelSampling) { W->bSnapToPixel = false; }
 			ApplyFillBorderStyle(W, Node.Style);
 			FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
 			FVector2D Max(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());

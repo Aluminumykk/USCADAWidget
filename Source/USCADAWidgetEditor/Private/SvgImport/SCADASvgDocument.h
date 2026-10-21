@@ -44,6 +44,8 @@ struct FSCADASvgNode
 	/** SVG id 属性（用于命名生成控件；可为空） */
 	FString Id;
 	FSCADASvgStyle Style;
+	/** true = 由 path 采样生成的点列（亚像素坐标，工厂据此关闭控件的像素对齐） */
+	bool bSubPixelSampling = false;
 
 	// —— 几何（viewBox 坐标；无旋转变换的组平移已烘入；含义按 Kind）——
 	/** Rect: 左上角 / Circle、Ellipse: 圆心 / Line: 起点 */

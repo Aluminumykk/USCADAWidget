@@ -43,19 +43,24 @@ struct FSCADASvgNode
 	FString Id;
 	FSCADASvgStyle Style;
 
-	// —— 几何（viewBox 坐标；含义按 Kind）——
+	// —— 几何（viewBox 坐标；无旋转变换的组平移已烘入；含义按 Kind）——
 	/** Rect: 左上角 / Circle、Ellipse: 圆心 / Line: 起点 */
 	FVector2D P1 = FVector2D::ZeroVector;
 	/** Rect: 宽高 / Ellipse: (rx, ry) / Line: 终点 */
 	FVector2D P2 = FVector2D::ZeroVector;
+	/** Rect: 圆角半径 (rx, ry)（ry 缺省 = rx；0 = 直角） */
+	FVector2D CornerRadius = FVector2D::ZeroVector;
 	/** Circle: 半径 */
 	float Radius = 0.0f;
 	/** Polyline / Polygon: 顶点列 */
 	TArray<FVector2D> Points;
 
-	// —— 分组（Kind=Group）：旋转动画锚点（SVG transform="rotate(a[,cx,cy])"）——
+	// —— 分组（Kind=Group，仅含 rotate 变换的组才保留为节点；无旋转组已在解析层扁平化）——
+	/** 组平移（transform 列表中全部 translate 与父链平移的累计，viewBox 空间绝对值） */
+	FVector2D Translation = FVector2D::ZeroVector;
 	bool bHasRotation = false;
 	float RotationAngle = 0.0f;
+	/** 旋转中心（组容器本地空间 = 原始 SVG 坐标，不含组平移与 viewBox 修正） */
 	FVector2D RotationCenter = FVector2D::ZeroVector;
 
 	TArray<FSCADASvgNode> Children;
@@ -69,6 +74,7 @@ struct FSCADASvgDocument
 	TArray<FSCADASvgNode> Roots;
 
 	/** 从 SVG 文本解析（FXmlFile）。不支持的元素/属性跳过并记 Warning 日志（LogSCADASvg）。
+	 *  未知命名空间的元素/属性（inkscape:/sodipodi: 等厂商扩展）按 SVG 规范静默忽略。
 	 *  返回 false = XML 本身无法解析。 */
 	static bool Parse(const FString& SvgText, FSCADASvgDocument& OutDocument);
 };

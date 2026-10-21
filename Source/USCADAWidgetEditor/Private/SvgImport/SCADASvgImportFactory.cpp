@@ -110,7 +110,7 @@ namespace SCADASvgImport
 			GroupCanvas->CanvasSize = ViewBoxSize;
 			GroupCanvas->ScaleMode = ESCADACanvasScaleMode::None;
 			GroupCanvas->bShowGrid = false;
-			AddToCanvas(ParentCanvas, GroupCanvas, FVector2D::ZeroVector, ViewBoxSize);
+			AddToCanvas(ParentCanvas, GroupCanvas, Node.Translation, ViewBoxSize);
 
 			if (Node.bHasRotation)
 			{
@@ -128,18 +128,28 @@ namespace SCADASvgImport
 		}
 		case ESCADASvgNodeKind::Rect:
 		{
-			if (Node.P2.X <= 0.0 || Node.P2.Y <= 0.0) { return; }
+			if (Node.P2.X <= 0.0 || Node.P2.Y <= 0.0)
+			{
+				UE_LOG(LogSCADASvgImport, Warning, TEXT("Rect '%s' 宽/高无效（%.1f x %.1f），已跳过"), *Node.Id, Node.P2.X, Node.P2.Y);
+				return;
+			}
 			USCADARectangleWidget* W = WidgetTree->ConstructWidget<USCADARectangleWidget>(
 				USCADARectangleWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Rect"), UsedNames));
 			W->Position = Node.P1;
 			W->Size = Node.P2;
+			W->CornerRadiusX = (float)Node.CornerRadius.X;
+			W->CornerRadiusY = (float)Node.CornerRadius.Y;
 			ApplyFillBorderStyle(W, Node.Style);
 			AddToCanvas(ParentCanvas, W, Node.P1, Node.P2);
 			break;
 		}
 		case ESCADASvgNodeKind::Circle:
 		{
-			if (Node.Radius <= 0.0f) { return; }
+			if (Node.Radius <= 0.0f)
+			{
+				UE_LOG(LogSCADASvgImport, Warning, TEXT("Circle '%s' 半径无效，已跳过"), *Node.Id);
+				return;
+			}
 			USCADACircleWidget* W = WidgetTree->ConstructWidget<USCADACircleWidget>(
 				USCADACircleWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Circle"), UsedNames));
 			W->Center = Node.P1;
@@ -150,7 +160,11 @@ namespace SCADASvgImport
 		}
 		case ESCADASvgNodeKind::Ellipse:
 		{
-			if (Node.P2.X <= 0.0 || Node.P2.Y <= 0.0) { return; }
+			if (Node.P2.X <= 0.0 || Node.P2.Y <= 0.0)
+			{
+				UE_LOG(LogSCADASvgImport, Warning, TEXT("Ellipse '%s' 半径无效，已跳过"), *Node.Id);
+				return;
+			}
 			USCADAEllipseWidget* W = WidgetTree->ConstructWidget<USCADAEllipseWidget>(
 				USCADAEllipseWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Ellipse"), UsedNames));
 			W->Center = Node.P1;
@@ -179,7 +193,11 @@ namespace SCADASvgImport
 		}
 		case ESCADASvgNodeKind::Polyline:
 		{
-			if (Node.Points.Num() < 2) { return; }
+			if (Node.Points.Num() < 2)
+			{
+				UE_LOG(LogSCADASvgImport, Warning, TEXT("Polyline '%s' 顶点不足 2 个，已跳过"), *Node.Id);
+				return;
+			}
 			if (Node.Style.Fill.IsSet())
 			{
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Polyline '%s' 的 fill 被忽略（折线无填充概念）"), *Node.Id);
@@ -200,7 +218,11 @@ namespace SCADASvgImport
 		}
 		case ESCADASvgNodeKind::Polygon:
 		{
-			if (Node.Points.Num() < 3) { return; }
+			if (Node.Points.Num() < 3)
+			{
+				UE_LOG(LogSCADASvgImport, Warning, TEXT("Polygon '%s' 顶点不足 3 个，已跳过"), *Node.Id);
+				return;
+			}
 			USCADAPolygonWidget* W = WidgetTree->ConstructWidget<USCADAPolygonWidget>(
 				USCADAPolygonWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Polygon"), UsedNames));
 			W->Points = Node.Points;

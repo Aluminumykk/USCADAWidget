@@ -152,7 +152,11 @@ namespace SCADASvgImport
 						Offset = bPercent ? Offset / 100.0f : FMath::Clamp(Offset, 0.0f, 1.0f);
 					}
 					FLinearColor C = FLinearColor::Black;
-					TryParseColor(Stop->GetAttribute(TEXT("stop-color")), C);
+					const FString StopColor = Stop->GetAttribute(TEXT("stop-color"));
+					if (StopColor.IsEmpty() || !TryParseColor(StopColor, C))
+					{
+						UE_LOG(LogSCADASvg, Warning, TEXT("渐变 '%s' 的 stop 无有效 stop-color（可能在命名空间扩展属性中），按黑色参与平均"), *Id);
+					}
 					const FString StopOpacity = Stop->GetAttribute(TEXT("stop-opacity"));
 					if (!StopOpacity.IsEmpty())
 					{
@@ -235,48 +239,57 @@ namespace SCADASvgImport
 		return Points;
 	}
 
-	/** 解析 g 的 transform，仅识别 rotate(a[,cx,cy])；其余变换警告忽略（P0） */
-	static void ParseGroupTransform(const FString& Value, FSCADASvgNode& OutNode)
+	/** 解析 g 的 transform 列表：全部 translate 累加进 OutTranslation；识别 rotate(a[,cx,cy])；
+	 *  scale/matrix/skew 警告忽略。translate 与 rotate 混排时的顺序语义按近似处理（先平移后旋转）。 */
+	static void ParseGroupTransform(const FString& Value, const FString& GroupId,
+		FVector2D& OutTranslation, bool& bOutHasRotation, float& OutRotationAngle, FVector2D& OutRotationCenter)
 	{
 		FString V = Value;
 		V.ReplaceInline(TEXT("\n"), TEXT(" "));
-		int32 SearchFrom = 0;
-		while (true)
+		int32 Pos = 0;
+		while (Pos < V.Len())
 		{
-			const int32 Idx = V.Find(TEXT("rotate"), ESearchCase::IgnoreCase, ESearchDir::FromStart, SearchFrom);
-			if (Idx == INDEX_NONE)
+			const int32 Open = V.Find(TEXT("("), ESearchCase::CaseSensitive, ESearchDir::FromStart, Pos);
+			if (Open == INDEX_NONE)
 			{
 				break;
 			}
-			SearchFrom = Idx + 6;
-			const int32 Open = V.Find(TEXT("("), ESearchCase::CaseSensitive, ESearchDir::FromStart, Idx);
-			const int32 Close = V.Find(TEXT(")"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Idx);
-			if (Open == INDEX_NONE || Close == INDEX_NONE || Close < Open)
+			const int32 Close = V.Find(TEXT(")"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Open);
+			if (Close == INDEX_NONE)
 			{
-				continue;
+				break;
 			}
+			// 关键字 = '(' 前紧邻的连续字母
+			int32 KeyStart = Open;
+			while (KeyStart > 0 && FChar::IsAlpha(V[KeyStart - 1]))
+			{
+				--KeyStart;
+			}
+			const FString Keyword = V.Mid(KeyStart, Open - KeyStart).ToLower();
+
 			FString Args = V.Mid(Open + 1, Close - Open - 1);
 			Args.ReplaceInline(TEXT(","), TEXT(" "));
 			TArray<FString> Tokens;
 			Args.ParseIntoArrayWS(Tokens);
-			if (Tokens.Num() >= 1)
+
+			if (Keyword == TEXT("translate") && Tokens.Num() >= 1)
 			{
-				OutNode.bHasRotation = true;
-				OutNode.RotationAngle = FCString::Atof(*Tokens[0]);
+				OutTranslation += FVector2D(FCString::Atof(*Tokens[0]), Tokens.Num() >= 2 ? FCString::Atof(*Tokens[1]) : 0.0f);
+			}
+			else if (Keyword == TEXT("rotate") && Tokens.Num() >= 1)
+			{
+				bOutHasRotation = true;
+				OutRotationAngle = FCString::Atof(*Tokens[0]);
 				if (Tokens.Num() >= 3)
 				{
-					OutNode.RotationCenter = FVector2D(FCString::Atof(*Tokens[1]), FCString::Atof(*Tokens[2]));
+					OutRotationCenter = FVector2D(FCString::Atof(*Tokens[1]), FCString::Atof(*Tokens[2]));
 				}
 			}
-		}
-
-		// 未支持的变换（translate/scale/matrix/skew）警告一次
-		for (const TCHAR* Keyword : { TEXT("translate"), TEXT("scale"), TEXT("matrix"), TEXT("skew") })
-		{
-			if (V.Contains(Keyword, ESearchCase::IgnoreCase))
+			else if (Keyword == TEXT("scale") || Keyword == TEXT("matrix") || Keyword.StartsWith(TEXT("skew")))
 			{
-				UE_LOG(LogSCADASvg, Warning, TEXT("分组 '%s' 含 %s 变换，P0 版本忽略（图形位置可能偏差）"), *OutNode.Id, Keyword);
+				UE_LOG(LogSCADASvg, Warning, TEXT("分组 '%s' 含 %s 变换，暂不支持已忽略（图形可能变形/偏差）"), *GroupId, *Keyword);
 			}
+			Pos = Close + 1;
 		}
 	}
 
@@ -291,37 +304,47 @@ namespace SCADASvgImport
 		return FCString::Atof(*V);
 	}
 
-	/** 递归解析元素节点（样式沿组继承；返回 false = 该节点被跳过） */
-	static bool ParseElement(const FXmlNode* XmlNode, const FSCADASvgStyle& ParentStyle,
-		const TMap<FString, FLinearColor>& Gradients, const FVector2D& ViewBoxOffset, FSCADASvgNode& OutNode)
+	/** 递归解析元素节点，产物追加到 OutNodes（一个 XML 元素可产 0..N 个节点——无旋转组扁平化时
+	 *  组本身不产出、子节点直接挂父级）。样式沿组继承；AccumOffset = 父链 translate 与
+	 *  viewBox min 修正的累计平移（顶层调用传 -ViewBoxMin），烘入叶子坐标。 */
+	static void ParseElement(const FXmlNode* XmlNode, const FSCADASvgStyle& ParentStyle,
+		const TMap<FString, FLinearColor>& Gradients, const FVector2D& AccumOffset, const FVector2D& ViewBoxMin,
+		TArray<FSCADASvgNode>& OutNodes)
 	{
 		const FString& Tag = XmlNode->GetTag();
+
+		// 未知命名空间元素（inkscape:/sodipodi: 等厂商扩展）按 SVG 规范静默忽略
+		if (Tag.Contains(TEXT(":")))
+		{
+			return;
+		}
 
 		// display="none" 整棵子树跳过
 		if (XmlNode->GetAttribute(TEXT("display")).Equals(TEXT("none"), ESearchCase::IgnoreCase))
 		{
-			return false;
+			return;
 		}
 
-		if (Tag.Equals(TEXT("g"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Group; }
-		else if (Tag.Equals(TEXT("rect"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Rect; }
-		else if (Tag.Equals(TEXT("circle"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Circle; }
-		else if (Tag.Equals(TEXT("ellipse"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Ellipse; }
-		else if (Tag.Equals(TEXT("line"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Line; }
-		else if (Tag.Equals(TEXT("polyline"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Polyline; }
-		else if (Tag.Equals(TEXT("polygon"), ESearchCase::IgnoreCase)) { OutNode.Kind = ESCADASvgNodeKind::Polygon; }
+		ESCADASvgNodeKind Kind;
+		if (Tag.Equals(TEXT("g"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Group; }
+		else if (Tag.Equals(TEXT("rect"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Rect; }
+		else if (Tag.Equals(TEXT("circle"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Circle; }
+		else if (Tag.Equals(TEXT("ellipse"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Ellipse; }
+		else if (Tag.Equals(TEXT("line"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Line; }
+		else if (Tag.Equals(TEXT("polyline"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Polyline; }
+		else if (Tag.Equals(TEXT("polygon"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Polygon; }
 		else
 		{
 			// title/desc/defs/metadata 等静默跳过；其余提示
-			static const TSet<FString> SilentTags = { TEXT("title"), TEXT("desc"), TEXT("defs"), TEXT("metadata"), TEXT("sodipodi:namedview"), TEXT("xml") };
+			static const TSet<FString> SilentTags = { TEXT("title"), TEXT("desc"), TEXT("defs"), TEXT("metadata"), TEXT("xml") };
 			if (!SilentTags.Contains(Tag.ToLower()))
 			{
-				UE_LOG(LogSCADASvg, Warning, TEXT("不支持的 SVG 元素 <%s>，已跳过（P0 支持 rect/circle/ellipse/line/polyline/polygon/g）"), *Tag);
+				UE_LOG(LogSCADASvg, Warning, TEXT("不支持的 SVG 元素 <%s>，已跳过（支持 rect/circle/ellipse/line/polyline/polygon/g）"), *Tag);
 			}
-			return false;
+			return;
 		}
 
-		OutNode.Id = XmlNode->GetAttribute(TEXT("id"));
+		const FString Id = XmlNode->GetAttribute(TEXT("id"));
 
 		// —— 样式：父样式 + 本元素覆盖（fill/stroke/stroke-width/fill-opacity/stroke-opacity）——
 		FSCADASvgStyle Style = ParentStyle;
@@ -359,74 +382,97 @@ namespace SCADASvgImport
 				Style.StrokeWidth = FMath::Max(ParseLength(StrokeWidthValue, 1.0f), 0.0f);
 			}
 		}
-		OutNode.Style = Style;
 
-		// —— 几何 ——
-		switch (OutNode.Kind)
+		// —— 分组：translate 烘平 / rotate 保留容器节点 ——
+		if (Kind == ESCADASvgNodeKind::Group)
+		{
+			FVector2D T = FVector2D::ZeroVector;
+			bool bHasRotation = false;
+			float RotationAngle = 0.0f;
+			FVector2D RotationCenter = FVector2D::ZeroVector;
+			const FString Transform = XmlNode->GetAttribute(TEXT("transform"));
+			if (!Transform.IsEmpty())
+			{
+				ParseGroupTransform(Transform, Id, T, bHasRotation, RotationAngle, RotationCenter);
+			}
+
+			if (!bHasRotation)
+			{
+				// 无旋转组扁平化：平移累加进子坐标，组节点不产出（样式继承链不断——传本组 Style）
+				const FVector2D ChildOffset = AccumOffset + T;
+				for (const FXmlNode* Child : XmlNode->GetChildrenNodes())
+				{
+					ParseElement(Child, Style, Gradients, ChildOffset, ViewBoxMin, OutNodes);
+				}
+				return;
+			}
+
+			// 含 rotate 的组保留为容器节点：槽位置承担平移（Translation = 父链累计 + 本组 translate，
+			// 含 viewBox min 修正），子元素保持原始 SVG 坐标（容器本地空间），RenderTransform 绕
+			// RotationCenter（原始 SVG 坐标）旋转 ≈ SVG 的 T*R 语义
+			FSCADASvgNode Node;
+			Node.Kind = ESCADASvgNodeKind::Group;
+			Node.Id = Id;
+			Node.Style = Style;
+			Node.Translation = AccumOffset + T;
+			Node.bHasRotation = true;
+			Node.RotationAngle = RotationAngle;
+			Node.RotationCenter = RotationCenter;
+			for (const FXmlNode* Child : XmlNode->GetChildrenNodes())
+			{
+				ParseElement(Child, Style, Gradients, FVector2D::ZeroVector, ViewBoxMin, Node.Children);
+			}
+			// 空分组无意义
+			if (Node.Children.Num() > 0)
+			{
+				OutNodes.Add(MoveTemp(Node));
+			}
+			return;
+		}
+
+		// —— 叶子元素：几何 + 累积平移烘入 ——
+		FSCADASvgNode Node;
+		Node.Kind = Kind;
+		Node.Id = Id;
+		Node.Style = Style;
+		switch (Kind)
 		{
 		case ESCADASvgNodeKind::Rect:
-			OutNode.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("x"))), ParseLength(XmlNode->GetAttribute(TEXT("y"))));
-			OutNode.P2 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("width"))), ParseLength(XmlNode->GetAttribute(TEXT("height"))));
+			Node.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("x"))), ParseLength(XmlNode->GetAttribute(TEXT("y"))));
+			Node.P2 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("width"))), ParseLength(XmlNode->GetAttribute(TEXT("height"))));
+			Node.CornerRadius.X = ParseLength(XmlNode->GetAttribute(TEXT("rx")));
+			Node.CornerRadius.Y = ParseLength(XmlNode->GetAttribute(TEXT("ry")), (float)Node.CornerRadius.X);
 			break;
 		case ESCADASvgNodeKind::Circle:
-			OutNode.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("cx"))), ParseLength(XmlNode->GetAttribute(TEXT("cy"))));
-			OutNode.Radius = ParseLength(XmlNode->GetAttribute(TEXT("r")));
+			Node.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("cx"))), ParseLength(XmlNode->GetAttribute(TEXT("cy"))));
+			Node.Radius = ParseLength(XmlNode->GetAttribute(TEXT("r")));
 			break;
 		case ESCADASvgNodeKind::Ellipse:
-			OutNode.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("cx"))), ParseLength(XmlNode->GetAttribute(TEXT("cy"))));
-			OutNode.P2 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("rx"))), ParseLength(XmlNode->GetAttribute(TEXT("ry"))));
+			Node.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("cx"))), ParseLength(XmlNode->GetAttribute(TEXT("cy"))));
+			Node.P2 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("rx"))), ParseLength(XmlNode->GetAttribute(TEXT("ry"))));
 			break;
 		case ESCADASvgNodeKind::Line:
-			OutNode.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("x1"))), ParseLength(XmlNode->GetAttribute(TEXT("y1"))));
-			OutNode.P2 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("x2"))), ParseLength(XmlNode->GetAttribute(TEXT("y2"))));
+			Node.P1 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("x1"))), ParseLength(XmlNode->GetAttribute(TEXT("y1"))));
+			Node.P2 = FVector2D(ParseLength(XmlNode->GetAttribute(TEXT("x2"))), ParseLength(XmlNode->GetAttribute(TEXT("y2"))));
 			break;
 		case ESCADASvgNodeKind::Polyline:
 		case ESCADASvgNodeKind::Polygon:
-			OutNode.Points = ParsePointsList(XmlNode->GetAttribute(TEXT("points")));
+			Node.Points = ParsePointsList(XmlNode->GetAttribute(TEXT("points")));
 			break;
 		case ESCADASvgNodeKind::Group:
 			break;
 		}
 
-		// viewBox min 偏移换算（viewBox="minX minY w h" 且 min 非 0 时平移回原点）
-		if (!ViewBoxOffset.IsNearlyZero())
+		Node.P1 += AccumOffset;
+		if (Kind == ESCADASvgNodeKind::Line)
 		{
-			OutNode.P1 -= ViewBoxOffset;
-			if (OutNode.Kind == ESCADASvgNodeKind::Line)
-			{
-				OutNode.P2 -= ViewBoxOffset;
-			}
-			for (FVector2D& P : OutNode.Points)
-			{
-				P -= ViewBoxOffset;
-			}
-			OutNode.RotationCenter -= ViewBoxOffset;
+			Node.P2 += AccumOffset;
 		}
-
-		// —— 分组：transform 旋转锚点 + 递归子元素 ——
-		if (OutNode.Kind == ESCADASvgNodeKind::Group)
+		for (FVector2D& P : Node.Points)
 		{
-			const FString Transform = XmlNode->GetAttribute(TEXT("transform"));
-			if (!Transform.IsEmpty())
-			{
-				ParseGroupTransform(Transform, OutNode);
-			}
-			for (const FXmlNode* Child : XmlNode->GetChildrenNodes())
-			{
-				FSCADASvgNode ChildNode;
-				if (ParseElement(Child, Style, Gradients, ViewBoxOffset, ChildNode))
-				{
-					OutNode.Children.Add(MoveTemp(ChildNode));
-				}
-			}
-			// 空分组无意义
-			if (OutNode.Children.Num() == 0)
-			{
-				return false;
-			}
+			P += AccumOffset;
 		}
-
-		return true;
+		OutNodes.Add(MoveTemp(Node));
 	}
 }
 
@@ -446,7 +492,7 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 	}
 
 	// viewBox / width / height
-	FVector2D ViewBoxOffset = FVector2D::ZeroVector;
+	FVector2D ViewBoxMin = FVector2D::ZeroVector;
 	{
 		const FString ViewBox = Root->GetAttribute(TEXT("viewBox"));
 		if (!ViewBox.IsEmpty())
@@ -457,7 +503,7 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 			Normalized.ParseIntoArrayWS(Tokens);
 			if (Tokens.Num() == 4)
 			{
-				ViewBoxOffset = FVector2D(FCString::Atof(*Tokens[0]), FCString::Atof(*Tokens[1]));
+				ViewBoxMin = FVector2D(FCString::Atof(*Tokens[0]), FCString::Atof(*Tokens[1]));
 				OutDocument.ViewBoxSize = FVector2D(FCString::Atof(*Tokens[2]), FCString::Atof(*Tokens[3]));
 			}
 		}
@@ -484,11 +530,7 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 
 	for (const FXmlNode* Child : Root->GetChildrenNodes())
 	{
-		FSCADASvgNode Node;
-		if (SCADASvgImport::ParseElement(Child, RootStyle, Gradients, ViewBoxOffset, Node))
-		{
-			OutDocument.Roots.Add(MoveTemp(Node));
-		}
+		SCADASvgImport::ParseElement(Child, RootStyle, Gradients, -ViewBoxMin, ViewBoxMin, OutDocument.Roots);
 	}
 
 	UE_LOG(LogSCADASvg, Log, TEXT("SVG 解析完成：viewBox %.0fx%.0f，顶层元素 %d 个"),

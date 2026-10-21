@@ -96,6 +96,17 @@ namespace SCADASvgImport
 		return CanvasSlot;
 	}
 
+	/** 生成的控件默认不设为变量（IsVariable=false）——元件里需要蓝图/动画驱动的部件很少，
+	 *  默认全是变量会污染 Widget Blueprint 的变量列表；要驱动的个别控件在设计器里手动勾 Is Variable 即可。
+	 *  例外：带 rotate 的分组画布（旋转动画的直接驱动对象）保持变量。 */
+	template <typename TWidget>
+	static TWidget* ConstructNonVariable(UWidgetTree* WidgetTree, UClass* WidgetClass, FName Name)
+	{
+		TWidget* W = WidgetTree->ConstructWidget<TWidget>(WidgetClass, Name);
+		W->bIsVariable = false;
+		return W;
+	}
+
 	/** 递归构建：SVG 节点 → SCADA 图元控件（叶子坐标 = viewBox 空间，与画布设计坐标 1:1；
 	 *  含 rotate 的组容器用 GroupContainerSize——组内子元素保持原始 SVG 坐标，与顶层裁剪无关） */
 	static void BuildNode(UWidgetTree* WidgetTree, USCADACanvasWidget* ParentCanvas, const FVector2D& GroupContainerSize,
@@ -107,7 +118,7 @@ namespace SCADASvgImport
 		{
 			// 分组 → 嵌套 SCADA 画布（尺寸 = 组容器坐标空间 = 裁剪前 viewBox，子元素坐标同空间 1:1）；
 			// rotate(a,cx,cy) → RenderTransform：动画锚点保留，用户可直接驱动 Angle（如泵叶轮）
-			USCADACanvasWidget* GroupCanvas = WidgetTree->ConstructWidget<USCADACanvasWidget>(
+			USCADACanvasWidget* GroupCanvas = ConstructNonVariable<USCADACanvasWidget>(WidgetTree,
 				USCADACanvasWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Group"), UsedNames));
 			GroupCanvas->CanvasSize = GroupContainerSize;
 			GroupCanvas->ScaleMode = ESCADACanvasScaleMode::None;
@@ -116,6 +127,7 @@ namespace SCADASvgImport
 
 			if (Node.bHasRotation)
 			{
+				GroupCanvas->bIsVariable = true;
 				GroupCanvas->SetRenderTransformAngle(Node.RotationAngle);
 				GroupCanvas->SetRenderTransformPivot(FVector2D(
 					GroupContainerSize.X > 0.0 ? Node.RotationCenter.X / GroupContainerSize.X : 0.5,
@@ -135,7 +147,7 @@ namespace SCADASvgImport
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Rect '%s' 宽/高无效（%.1f x %.1f），已跳过"), *Node.Id, Node.P2.X, Node.P2.Y);
 				return;
 			}
-			USCADARectangleWidget* W = WidgetTree->ConstructWidget<USCADARectangleWidget>(
+			USCADARectangleWidget* W = ConstructNonVariable<USCADARectangleWidget>(WidgetTree,
 				USCADARectangleWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Rect"), UsedNames));
 			W->Position = Node.P1;
 			W->Size = Node.P2;
@@ -152,7 +164,7 @@ namespace SCADASvgImport
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Circle '%s' 半径无效，已跳过"), *Node.Id);
 				return;
 			}
-			USCADACircleWidget* W = WidgetTree->ConstructWidget<USCADACircleWidget>(
+			USCADACircleWidget* W = ConstructNonVariable<USCADACircleWidget>(WidgetTree,
 				USCADACircleWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Circle"), UsedNames));
 			W->Center = Node.P1;
 			W->Radius = Node.Radius;
@@ -167,7 +179,7 @@ namespace SCADASvgImport
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Ellipse '%s' 半径无效，已跳过"), *Node.Id);
 				return;
 			}
-			USCADAEllipseWidget* W = WidgetTree->ConstructWidget<USCADAEllipseWidget>(
+			USCADAEllipseWidget* W = ConstructNonVariable<USCADAEllipseWidget>(WidgetTree,
 				USCADAEllipseWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Ellipse"), UsedNames));
 			W->Center = Node.P1;
 			W->RadiusX = (float)Node.P2.X;
@@ -183,7 +195,7 @@ namespace SCADASvgImport
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Line '%s' 无 stroke（不可见），已跳过"), *Node.Id);
 				return;
 			}
-			USCADALineWidget* W = WidgetTree->ConstructWidget<USCADALineWidget>(
+			USCADALineWidget* W = ConstructNonVariable<USCADALineWidget>(WidgetTree,
 				USCADALineWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Line"), UsedNames));
 			W->StartPoint = Node.P1;
 			W->EndPoint = Node.P2;
@@ -204,7 +216,7 @@ namespace SCADASvgImport
 			{
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Polyline '%s' 的 fill 被忽略（折线无填充概念）"), *Node.Id);
 			}
-			USCADAPolylineWidget* W = WidgetTree->ConstructWidget<USCADAPolylineWidget>(
+			USCADAPolylineWidget* W = ConstructNonVariable<USCADAPolylineWidget>(WidgetTree,
 				USCADAPolylineWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Polyline"), UsedNames));
 			W->Points = Node.Points;
 			if (Node.bSubPixelSampling) { W->bSnapToPixel = false; }
@@ -226,7 +238,7 @@ namespace SCADASvgImport
 				UE_LOG(LogSCADASvgImport, Warning, TEXT("Polygon '%s' 顶点不足 3 个，已跳过"), *Node.Id);
 				return;
 			}
-			USCADAPolygonWidget* W = WidgetTree->ConstructWidget<USCADAPolygonWidget>(
+			USCADAPolygonWidget* W = ConstructNonVariable<USCADAPolygonWidget>(WidgetTree,
 				USCADAPolygonWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Polygon"), UsedNames));
 			W->Points = Node.Points;
 			if (Node.bSubPixelSampling) { W->bSnapToPixel = false; }

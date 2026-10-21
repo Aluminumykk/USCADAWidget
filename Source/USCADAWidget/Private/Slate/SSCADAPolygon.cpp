@@ -65,8 +65,15 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	//    边框宽度会使内轮廓坍塌（T ≥ 小边一半）时不走此路径——与采样管线“内缩坍塌静默跳过
 	//    边框”的语义保持同侧（坍塌区间留给采样路径处理）。
 	//    O(1) 常量几何，无需走几何缓存，在缓存之前短路。
+	//    **放大倍数明显 >1 时停用（2026-10-21 实测）**：SDF 的 AA 过渡带 = 1 局部单位
+	//    （引擎 shader 写死，不可调），放大 N 倍即 N 屏幕像素渐变；而折线/多边形/以及采样
+	//    管线的圆都是"硬几何边 + 3 屏幕像素覆层（1px 渐变）"——元件放大复用场景（小元件
+	//    RenderTransform 放大使用）下 SDF 图元的边明显比其余图元"糊"，且与"直接按大尺寸
+	//    绘制"（RenderScale=1，1px 渐变）的效果不一致。放大时回退采样管线（256 点采样弦弧
+	//    误差 ~0.02px 不可辨），全图元边缘质量在任何缩放下统一为 1px 屏幕渐变。缩小
+	//    （RenderScale<1）时 SDF 过渡带 <1px 更锐利，无此问题，保留。
 	FAnalyticBox ABox;
-	if (CurLineStyle == ESCADALineStyle::Solid && TryGetAnalyticBox(ABox)
+	if (CurLineStyle == ESCADALineStyle::Solid && RenderScale <= 1.5f && TryGetAnalyticBox(ABox)
 		&& LineThickness < FMath::Min(ABox.Size.X, ABox.Size.Y) * 0.5f)
 	{
 		const bool bDrawFill = (CurFillPattern == ESCADAFillPattern::Solid);

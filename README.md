@@ -116,6 +116,8 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - 未知命名空间的元素与属性（`inkscape:` / `sodipodi:` 等厂商扩展）按 SVG 规范静默忽略
 - 暂不支持：`<text>`、内联 `style` 属性、`<use>`/`<symbol>`、裁剪/蒙版（clipPath/mask）——不支持的项会跳过并在输出日志（LogSCADASvg）给出警告
 
+**按内容裁剪 viewBox**（Project Settings → SCADA SVG Import，默认开启）：很多元件素材的 viewBox 比图形本身大一圈（四周留白），开启后导入时自动按内容包围盒裁剪——根画布紧贴图形；`CropPadding` 可加回少量边距。带 `rotate` 的分组不受影响（其容器坐标空间与 Pivot 锚定原始 viewBox）。
+
 ## 目录结构
 
 ```

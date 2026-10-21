@@ -24,6 +24,7 @@ public class USCADAWidgetEditor : ModuleRules
 			"UMGEditor",
 			"UnrealEd",
 			"XmlParser",
+			"DeveloperSettings",
 			"USCADAWidget"
 		});
 	}

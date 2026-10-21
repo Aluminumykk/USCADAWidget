@@ -73,12 +73,20 @@ struct FSCADASvgNode
 /** 解析结果 */
 struct FSCADASvgDocument
 {
-	/** viewBox 尺寸（无 viewBox 时用 width/height 兜底，再缺省 100×100） */
+	/** viewBox 尺寸（无 viewBox 时用 width/height 兜底，再缺省 100×100；CropToContent 后为内容包围盒尺寸） */
 	FVector2D ViewBoxSize = FVector2D(100.0, 100.0);
+	/** 含 rotate 组的容器坐标空间尺寸（组内容画布大小与 Pivot 换算基准）= 裁剪前的 viewBox 尺寸：
+	 *  组内子元素保持原始 SVG 坐标，与 CropToContent 的顶层裁剪无关；未裁剪时恒等于 ViewBoxSize。 */
+	FVector2D GroupContainerSize = FVector2D(100.0, 100.0);
 	TArray<FSCADASvgNode> Roots;
 
 	/** 从 SVG 文本解析（FXmlFile）。不支持的元素/属性跳过并记 Warning 日志（LogSCADASvg）。
 	 *  未知命名空间的元素/属性（inkscape:/sodipodi: 等厂商扩展）按 SVG 规范静默忽略。
 	 *  返回 false = XML 本身无法解析。 */
 	static bool Parse(const FString& SvgText, FSCADASvgDocument& OutDocument);
+
+	/** 按内容包围盒裁剪 viewBox：顶层坐标平移 -内容Min，ViewBoxSize 改为内容尺寸
+	 *  （余量 = 各元素描边半宽 + Padding；分组节点的槽平移 Translation 随顶层一同修正，
+	 *  组内容器本地坐标与旋转锚点不变）。无内容时不做任何修改。 */
+	void CropToContent(float Padding = 0.0f);
 };

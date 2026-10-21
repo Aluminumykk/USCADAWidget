@@ -3,6 +3,7 @@
 #include "SvgImport/SCADASvgImportFactory.h"
 
 #include "SvgImport/SCADASvgDocument.h"
+#include "SvgImport/SCADASvgImportSettings.h"
 
 #include "WidgetBlueprint.h"
 #include "Blueprint/WidgetTree.h"
@@ -95,34 +96,35 @@ namespace SCADASvgImport
 		return CanvasSlot;
 	}
 
-	/** 递归构建：SVG 节点 → SCADA 图元控件（视图坐标 = viewBox 空间，与画布设计坐标 1:1） */
-	static void BuildNode(UWidgetTree* WidgetTree, USCADACanvasWidget* ParentCanvas, const FVector2D& ViewBoxSize,
+	/** 递归构建：SVG 节点 → SCADA 图元控件（叶子坐标 = viewBox 空间，与画布设计坐标 1:1；
+	 *  含 rotate 的组容器用 GroupContainerSize——组内子元素保持原始 SVG 坐标，与顶层裁剪无关） */
+	static void BuildNode(UWidgetTree* WidgetTree, USCADACanvasWidget* ParentCanvas, const FVector2D& GroupContainerSize,
 		const FSCADASvgNode& Node, TSet<FString>& UsedNames)
 	{
 		switch (Node.Kind)
 		{
 		case ESCADASvgNodeKind::Group:
 		{
-			// 分组 → 嵌套 SCADA 画布（尺寸 = viewBox，子元素坐标同空间 1:1）；
+			// 分组 → 嵌套 SCADA 画布（尺寸 = 组容器坐标空间 = 裁剪前 viewBox，子元素坐标同空间 1:1）；
 			// rotate(a,cx,cy) → RenderTransform：动画锚点保留，用户可直接驱动 Angle（如泵叶轮）
 			USCADACanvasWidget* GroupCanvas = WidgetTree->ConstructWidget<USCADACanvasWidget>(
 				USCADACanvasWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Group"), UsedNames));
-			GroupCanvas->CanvasSize = ViewBoxSize;
+			GroupCanvas->CanvasSize = GroupContainerSize;
 			GroupCanvas->ScaleMode = ESCADACanvasScaleMode::None;
 			GroupCanvas->bShowGrid = false;
-			AddToCanvas(ParentCanvas, GroupCanvas, Node.Translation, ViewBoxSize);
+			AddToCanvas(ParentCanvas, GroupCanvas, Node.Translation, GroupContainerSize);
 
 			if (Node.bHasRotation)
 			{
 				GroupCanvas->SetRenderTransformAngle(Node.RotationAngle);
 				GroupCanvas->SetRenderTransformPivot(FVector2D(
-					ViewBoxSize.X > 0.0 ? Node.RotationCenter.X / ViewBoxSize.X : 0.5,
-					ViewBoxSize.Y > 0.0 ? Node.RotationCenter.Y / ViewBoxSize.Y : 0.5));
+					GroupContainerSize.X > 0.0 ? Node.RotationCenter.X / GroupContainerSize.X : 0.5,
+					GroupContainerSize.Y > 0.0 ? Node.RotationCenter.Y / GroupContainerSize.Y : 0.5));
 			}
 
 			for (const FSCADASvgNode& Child : Node.Children)
 			{
-				BuildNode(WidgetTree, GroupCanvas, ViewBoxSize, Child, UsedNames);
+				BuildNode(WidgetTree, GroupCanvas, GroupContainerSize, Child, UsedNames);
 			}
 			break;
 		}
@@ -259,7 +261,7 @@ namespace SCADASvgImport
 		UsedNames.Add(TEXT("SCADACanvas"));
 		for (const FSCADASvgNode& Node : Doc.Roots)
 		{
-			BuildNode(WidgetTree, RootCanvas, Doc.ViewBoxSize, Node, UsedNames);
+			BuildNode(WidgetTree, RootCanvas, Doc.GroupContainerSize, Node, UsedNames);
 		}
 	}
 }
@@ -288,6 +290,15 @@ UObject* USCADASvgImportFactory::FactoryCreateFile(UClass* InClass, UObject* InP
 	{
 		Warn->Logf(ELogVerbosity::Error, TEXT("SVG 导入失败：XML 无法解析（详见输出日志 LogSCADASvg）"));
 		return nullptr;
+	}
+
+	// 按内容包围盒裁剪 viewBox（Project Settings → SCADA SVG Import；消除图形四周留白）
+	if (const USCADASvgImportSettings* Settings = GetDefault<USCADASvgImportSettings>())
+	{
+		if (Settings->bCropViewBoxToContent)
+		{
+			Doc.CropToContent(Settings->CropPadding);
+		}
 	}
 
 	// 与 UWidgetBlueprintFactory 同路径创建 Widget Blueprint（WidgetTree 由 CreateBlueprint 内部建立）

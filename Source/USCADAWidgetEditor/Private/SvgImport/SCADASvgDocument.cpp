@@ -870,7 +870,115 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 		SCADASvgImport::ParseElement(Child, RootStyle, Gradients, -ViewBoxMin, ViewBoxMin, OutDocument.Roots);
 	}
 
+	// 组容器坐标空间 = 原始 viewBox（CropToContent 只改顶层 ViewBoxSize，不动本值）
+	OutDocument.GroupContainerSize = OutDocument.ViewBoxSize;
+
 	UE_LOG(LogSCADASvg, Log, TEXT("SVG 解析完成：viewBox %.0fx%.0f，顶层元素 %d 个"),
 		OutDocument.ViewBoxSize.X, OutDocument.ViewBoxSize.Y, OutDocument.Roots.Num());
 	return true;
+}
+
+namespace SCADASvgImport
+{
+	/** 递归累计节点在父空间中的包围盒（组：子包围盒 + 槽平移 Translation；忽略旋转的扩展量——
+	 *  旋转组少见且扩展有限，裁剪是近似工具）。描边元素外扩半线宽（笔画包络以中心线向两侧各伸 T/2）。 */
+	static void AccumNodeBBox(const FSCADASvgNode& Node, FVector2D& OutMin, FVector2D& OutMax, bool& bOutAny)
+	{
+		auto AccumPoint = [&](const FVector2D& P, float Pad)
+		{
+			const FVector2D Lo = P - FVector2D(Pad, Pad);
+			const FVector2D Hi = P + FVector2D(Pad, Pad);
+			if (!bOutAny)
+			{
+				OutMin = Lo;
+				OutMax = Hi;
+				bOutAny = true;
+			}
+			else
+			{
+				OutMin = FVector2D::Min(OutMin, Lo);
+				OutMax = FVector2D::Max(OutMax, Hi);
+			}
+		};
+
+		const float Pad = (Node.Style.Stroke.IsSet() && Node.Style.StrokeWidth > 0.0f) ? Node.Style.StrokeWidth * 0.5f : 0.0f;
+		switch (Node.Kind)
+		{
+		case ESCADASvgNodeKind::Group:
+			for (const FSCADASvgNode& Child : Node.Children)
+			{
+				FVector2D ChildMin, ChildMax;
+				bool bChildAny = false;
+				AccumNodeBBox(Child, ChildMin, ChildMax, bChildAny);
+				if (bChildAny)
+				{
+					AccumPoint(Node.Translation + ChildMin, 0.0f);
+					AccumPoint(Node.Translation + ChildMax, 0.0f);
+				}
+			}
+			break;
+		case ESCADASvgNodeKind::Rect:
+			AccumPoint(Node.P1, Pad);
+			AccumPoint(Node.P1 + Node.P2, Pad);
+			break;
+		case ESCADASvgNodeKind::Circle:
+			AccumPoint(Node.P1, Node.Radius + Pad);
+			break;
+		case ESCADASvgNodeKind::Ellipse:
+			AccumPoint(Node.P1 - Node.P2, Pad);
+			AccumPoint(Node.P1 + Node.P2, Pad);
+			break;
+		case ESCADASvgNodeKind::Line:
+			AccumPoint(Node.P1, Pad);
+			AccumPoint(Node.P2, Pad);
+			break;
+		case ESCADASvgNodeKind::Polyline:
+		case ESCADASvgNodeKind::Polygon:
+			for (const FVector2D& P : Node.Points)
+			{
+				AccumPoint(P, Pad);
+			}
+			break;
+		}
+	}
+}
+
+void FSCADASvgDocument::CropToContent(float Padding)
+{
+	FVector2D Min(0.0, 0.0), Max(0.0, 0.0);
+	bool bAny = false;
+	for (const FSCADASvgNode& Node : Roots)
+	{
+		SCADASvgImport::AccumNodeBBox(Node, Min, Max, bAny);
+	}
+	if (!bAny)
+	{
+		return;
+	}
+	Min -= FVector2D(Padding, Padding);
+	Max += FVector2D(Padding, Padding);
+
+	// 顶层平移修正：叶子坐标与组槽平移都在 viewBox 空间，统一 -Min；
+	// 组内容器本地坐标（含嵌套组的 Translation 与 RotationCenter）不变
+	for (FSCADASvgNode& Node : Roots)
+	{
+		if (Node.Kind == ESCADASvgNodeKind::Group)
+		{
+			Node.Translation -= Min;
+			continue;
+		}
+		Node.P1 -= Min;
+		if (Node.Kind == ESCADASvgNodeKind::Line)
+		{
+			Node.P2 -= Min;
+		}
+		for (FVector2D& P : Node.Points)
+		{
+			P -= Min;
+		}
+	}
+
+	ViewBoxSize = FVector2D(FMath::Max(Max.X - Min.X, 1.0), FMath::Max(Max.Y - Min.Y, 1.0));
+	UE_LOG(LogSCADASvg, Log, TEXT("按内容包围盒裁剪：min (%.1f, %.1f) → viewBox %.1fx%.1f"),
+		Min.X, Min.Y, ViewBoxSize.X, ViewBoxSize.Y);
 }

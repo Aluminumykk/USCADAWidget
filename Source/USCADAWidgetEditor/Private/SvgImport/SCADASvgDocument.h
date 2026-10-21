@@ -6,8 +6,10 @@
 
 /**
  * SVG 文档中间表示（SCADA 图元导入用，纯数据、无 UMG 依赖）。
- * P0 支持子集：rect / circle / ellipse / line / polyline / polygon / g（分组，仅 rotate 变换），
- * 样式 fill / stroke / stroke-width / fill-opacity / stroke-opacity（沿组继承），
+ * 支持子集：rect（含 rx/ry 圆角）/ circle / ellipse / line / polyline / polygon /
+ * path（d 全命令 M/L/H/V/C/S/Q/T/A/Z，贝塞尔与椭圆弧导入期采样折线化，闭合或有填充 →
+ * 多边形、仅描边开口 → 折线，一条 path 可产多个图元）/ g（分组：translate 烘平、rotate 保留容器），
+ * 样式 fill / stroke / stroke-width / opacity / fill-opacity / stroke-opacity（沿组继承），
  * defs 内 linearGradient / radialGradient 解析为加权平均纯色（真渐变排 P1）。
  * 坐标一律为 viewBox 空间（左上角原点、Y 向下，与 SCADA 画布设计坐标同构）。
  */

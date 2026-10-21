@@ -239,6 +239,295 @@ namespace SCADASvgImport
 		return Points;
 	}
 
+	// ———— path 数据解析：贝塞尔/椭圆弧采样为点列（导入期一次性烘焙，契合"点列真值"数据模型）————
+
+	/** 从 path 数据流读一个数（SVG 数值语法：符号可直连下一数 "10-5"=10,-5；双点 "0.4.3"=0.4,.3） */
+	static bool ReadPathNumber(const FString& D, int32& Pos, float& Out)
+	{
+		while (Pos < D.Len() && (FChar::IsWhitespace(D[Pos]) || D[Pos] == TEXT(','))) { ++Pos; }
+		if (Pos >= D.Len() || FChar::IsAlpha(D[Pos]))
+		{
+			return false;
+		}
+		const int32 Start = Pos;
+		if (D[Pos] == TEXT('+') || D[Pos] == TEXT('-')) { ++Pos; }
+		bool bDot = false;
+		while (Pos < D.Len())
+		{
+			const TCHAR C = D[Pos];
+			if (FChar::IsDigit(C)) { ++Pos; continue; }
+			if (C == TEXT('.') && !bDot) { bDot = true; ++Pos; continue; }
+			break;
+		}
+		if (Pos < D.Len() && (D[Pos] == TEXT('e') || D[Pos] == TEXT('E')))
+		{
+			int32 E = Pos + 1;
+			if (E < D.Len() && (D[E] == TEXT('+') || D[E] == TEXT('-'))) { ++E; }
+			if (E < D.Len() && FChar::IsDigit(D[E]))
+			{
+				Pos = E;
+				while (Pos < D.Len() && FChar::IsDigit(D[Pos])) { ++Pos; }
+			}
+		}
+		if (Pos == Start || (Pos == Start + 1 && (D[Start] == TEXT('+') || D[Start] == TEXT('-'))))
+		{
+			Pos = Start;
+			return false;
+		}
+		Out = FCString::Atof(*D.Mid(Start, Pos - Start));
+		return true;
+	}
+
+	/** 三次贝塞尔按近似长度自适应采样（~3px 一段），含终点、不含起点 */
+	static void SampleCubicBezier(const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, const FVector2D& P3, TArray<FVector2D>& Out)
+	{
+		const double ApproxLen = (P1 - P0).Size() + (P2 - P1).Size() + (P3 - P2).Size();
+		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 3.0f), 4, 64);
+		for (int32 i = 1; i <= N; ++i)
+		{
+			const double t = (double)i / N, u = 1.0 - t;
+			Out.Add(u * u * u * P0 + 3.0 * u * u * t * P1 + 3.0 * u * t * t * P2 + t * t * t * P3);
+		}
+	}
+
+	/** 二次贝塞尔采样，含终点、不含起点 */
+	static void SampleQuadraticBezier(const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, TArray<FVector2D>& Out)
+	{
+		const double ApproxLen = (P1 - P0).Size() + (P2 - P1).Size();
+		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 3.0f), 4, 64);
+		for (int32 i = 1; i <= N; ++i)
+		{
+			const double t = (double)i / N, u = 1.0 - t;
+			Out.Add(u * u * P0 + 2.0 * u * t * P1 + t * t * P2);
+		}
+	}
+
+	/** SVG 椭圆弧（端点参数化 → 中心参数化，规范 F.6.6）采样，含终点、不含起点 */
+	static void SampleEllipticalArc(const FVector2D& P0, float Rx, float Ry, float RotDeg,
+		bool bLargeArc, bool bSweep, const FVector2D& P1, TArray<FVector2D>& Out)
+	{
+		Rx = FMath::Abs(Rx);
+		Ry = FMath::Abs(Ry);
+		if (Rx < 1e-4f || Ry < 1e-4f || (P1 - P0).IsNearlyZero())
+		{
+			Out.Add(P1);
+			return;
+		}
+		const double Phi = FMath::DegreesToRadians(RotDeg);
+		const double CosP = FMath::Cos(Phi), SinP = FMath::Sin(Phi);
+		const double Dx = (P0.X - P1.X) * 0.5, Dy = (P0.Y - P1.Y) * 0.5;
+		const double X1p = CosP * Dx + SinP * Dy;
+		const double Y1p = -SinP * Dx + CosP * Dy;
+
+		double Rxd = Rx, Ryd = Ry;
+		const double Lam = X1p * X1p / (Rxd * Rxd) + Y1p * Y1p / (Ryd * Ryd);
+		if (Lam > 1.0)
+		{
+			const double S = FMath::Sqrt(Lam);
+			Rxd *= S;
+			Ryd *= S;
+		}
+
+		const double Num = Rxd * Rxd * Ryd * Ryd - Rxd * Rxd * Y1p * Y1p - Ryd * Ryd * X1p * X1p;
+		const double Den = Rxd * Rxd * Y1p * Y1p + Ryd * Ryd * X1p * X1p;
+		const double Coef = (bLargeArc != bSweep ? 1.0 : -1.0) * FMath::Sqrt(FMath::Max(0.0, Num / FMath::Max(Den, 1e-12)));
+		const double Cxp = Coef * Rxd * Y1p / Ryd;
+		const double Cyp = -Coef * Ryd * X1p / Rxd;
+		const double Cx = CosP * Cxp - SinP * Cyp + (P0.X + P1.X) * 0.5;
+		const double Cy = SinP * Cxp + CosP * Cyp + (P0.Y + P1.Y) * 0.5;
+
+		auto VecAngle = [](double Ux, double Uy, double Vx, double Vy)
+		{
+			const double Dot = Ux * Vx + Uy * Vy;
+			const double Len = FMath::Sqrt((Ux * Ux + Uy * Uy) * (Vx * Vx + Vy * Vy));
+			double Ang = FMath::Acos(FMath::Clamp(Dot / FMath::Max(Len, 1e-12), -1.0, 1.0));
+			if (Ux * Vy - Uy * Vx < 0.0) { Ang = -Ang; }
+			return Ang;
+		};
+		const double Theta1 = VecAngle(1.0, 0.0, (X1p - Cxp) / Rxd, (Y1p - Cyp) / Ryd);
+		double DTheta = VecAngle((X1p - Cxp) / Rxd, (Y1p - Cyp) / Ryd, (-X1p - Cxp) / Rxd, (-Y1p - Cyp) / Ryd);
+		const double TwoPi = 2.0 * PI;
+		if (!bSweep && DTheta > 0.0) { DTheta -= TwoPi; }
+		if (bSweep && DTheta < 0.0) { DTheta += TwoPi; }
+
+		const double ApproxLen = FMath::Max(Rxd, Ryd) * FMath::Abs(DTheta);
+		const int32 N = FMath::Clamp(FMath::CeilToInt((float)ApproxLen / 3.0f), 4, 128);
+		for (int32 i = 1; i <= N; ++i)
+		{
+			const double T = Theta1 + DTheta * (double)i / N;
+			Out.Add(FVector2D(
+				CosP * Rxd * FMath::Cos(T) - SinP * Ryd * FMath::Sin(T) + Cx,
+				SinP * Rxd * FMath::Cos(T) + CosP * Ryd * FMath::Sin(T) + Cy));
+		}
+	}
+
+	/** 解析 path 的 d 属性为子路径点列（M/L/H/V/C/S/Q/T/A/Z，含相对命令）。
+	 *  OutClosed[i] = 第 i 条子路径是否以 Z 闭合。贝塞尔/弧已采样折线化。 */
+	static void ParsePathData(const FString& D, TArray<TArray<FVector2D>>& OutSubpaths, TArray<bool>& OutClosed)
+	{
+		int32 Pos = 0;
+		TCHAR Cmd = 0;
+		FVector2D Cur(0.0, 0.0), StartPt(0.0, 0.0);
+		FVector2D PrevCubicCtrl(0.0, 0.0), PrevQuadCtrl(0.0, 0.0);
+		bool bHasCubicCtrl = false, bHasQuadCtrl = false;
+		int32 CurSub = INDEX_NONE;
+
+		auto NextIsNumber = [&D](int32 P)
+		{
+			while (P < D.Len() && (FChar::IsWhitespace(D[P]) || D[P] == TEXT(','))) { ++P; }
+			return P < D.Len() && !FChar::IsAlpha(D[P]);
+		};
+
+		while (Pos < D.Len())
+		{
+			while (Pos < D.Len() && (FChar::IsWhitespace(D[Pos]) || D[Pos] == TEXT(','))) { ++Pos; }
+			if (Pos >= D.Len())
+			{
+				break;
+			}
+			if (FChar::IsAlpha(D[Pos]))
+			{
+				Cmd = D[Pos];
+				++Pos;
+			}
+			else if (Cmd == 0)
+			{
+				break; // 数据不以命令开头，非法
+			}
+
+			TCHAR U = FChar::ToUpper(Cmd);
+			bool bRel = FChar::IsLower(Cmd);
+			if (U == TEXT('Z'))
+			{
+				if (CurSub != INDEX_NONE)
+				{
+					OutClosed[CurSub] = true;
+				}
+				Cur = StartPt;
+				CurSub = INDEX_NONE;
+				Cmd = 0;
+				bHasCubicCtrl = bHasQuadCtrl = false;
+				continue;
+			}
+
+			bool bFirstOfM = (U == TEXT('M'));
+			while (true)
+			{
+				if (U == TEXT('M') && !bFirstOfM)
+				{
+					U = TEXT('L'); // M 后续坐标对按隐式 L 处理
+				}
+
+				if (U == TEXT('M') || U == TEXT('L'))
+				{
+					float X, Y;
+					if (!ReadPathNumber(D, Pos, X) || !ReadPathNumber(D, Pos, Y)) { break; }
+					Cur = bRel ? Cur + FVector2D(X, Y) : FVector2D(X, Y);
+					if (U == TEXT('M'))
+					{
+						CurSub = OutSubpaths.AddDefaulted();
+						OutClosed.Add(false);
+						StartPt = Cur;
+					}
+					if (CurSub == INDEX_NONE) { CurSub = OutSubpaths.AddDefaulted(); OutClosed.Add(false); StartPt = Cur; }
+					OutSubpaths[CurSub].Add(Cur);
+					bHasCubicCtrl = bHasQuadCtrl = false;
+				}
+				else if (U == TEXT('H'))
+				{
+					float X;
+					if (!ReadPathNumber(D, Pos, X)) { break; }
+					Cur.X = bRel ? Cur.X + X : X;
+					if (CurSub != INDEX_NONE) { OutSubpaths[CurSub].Add(Cur); }
+					bHasCubicCtrl = bHasQuadCtrl = false;
+				}
+				else if (U == TEXT('V'))
+				{
+					float Y;
+					if (!ReadPathNumber(D, Pos, Y)) { break; }
+					Cur.Y = bRel ? Cur.Y + Y : Y;
+					if (CurSub != INDEX_NONE) { OutSubpaths[CurSub].Add(Cur); }
+					bHasCubicCtrl = bHasQuadCtrl = false;
+				}
+				else if (U == TEXT('C'))
+				{
+					float X1, Y1, X2, Y2, X, Y;
+					if (!ReadPathNumber(D, Pos, X1) || !ReadPathNumber(D, Pos, Y1) ||
+						!ReadPathNumber(D, Pos, X2) || !ReadPathNumber(D, Pos, Y2) ||
+						!ReadPathNumber(D, Pos, X) || !ReadPathNumber(D, Pos, Y)) { break; }
+					const FVector2D Off = bRel ? Cur : FVector2D::ZeroVector;
+					const FVector2D C1 = Off + FVector2D(X1, Y1), C2 = Off + FVector2D(X2, Y2), End = Off + FVector2D(X, Y);
+					if (CurSub != INDEX_NONE) { SampleCubicBezier(Cur, C1, C2, End, OutSubpaths[CurSub]); }
+					PrevCubicCtrl = C2;
+					bHasCubicCtrl = true;
+					bHasQuadCtrl = false;
+					Cur = End;
+				}
+				else if (U == TEXT('S'))
+				{
+					float X2, Y2, X, Y;
+					if (!ReadPathNumber(D, Pos, X2) || !ReadPathNumber(D, Pos, Y2) ||
+						!ReadPathNumber(D, Pos, X) || !ReadPathNumber(D, Pos, Y)) { break; }
+					const FVector2D Off = bRel ? Cur : FVector2D::ZeroVector;
+					const FVector2D C1 = bHasCubicCtrl ? 2.0 * Cur - PrevCubicCtrl : Cur;
+					const FVector2D C2 = Off + FVector2D(X2, Y2), End = Off + FVector2D(X, Y);
+					if (CurSub != INDEX_NONE) { SampleCubicBezier(Cur, C1, C2, End, OutSubpaths[CurSub]); }
+					PrevCubicCtrl = C2;
+					bHasCubicCtrl = true;
+					bHasQuadCtrl = false;
+					Cur = End;
+				}
+				else if (U == TEXT('Q'))
+				{
+					float X1, Y1, X, Y;
+					if (!ReadPathNumber(D, Pos, X1) || !ReadPathNumber(D, Pos, Y1) ||
+						!ReadPathNumber(D, Pos, X) || !ReadPathNumber(D, Pos, Y)) { break; }
+					const FVector2D Off = bRel ? Cur : FVector2D::ZeroVector;
+					const FVector2D C1 = Off + FVector2D(X1, Y1), End = Off + FVector2D(X, Y);
+					if (CurSub != INDEX_NONE) { SampleQuadraticBezier(Cur, C1, End, OutSubpaths[CurSub]); }
+					PrevQuadCtrl = C1;
+					bHasQuadCtrl = true;
+					bHasCubicCtrl = false;
+					Cur = End;
+				}
+				else if (U == TEXT('T'))
+				{
+					float X, Y;
+					if (!ReadPathNumber(D, Pos, X) || !ReadPathNumber(D, Pos, Y)) { break; }
+					const FVector2D Off = bRel ? Cur : FVector2D::ZeroVector;
+					const FVector2D C1 = bHasQuadCtrl ? 2.0 * Cur - PrevQuadCtrl : Cur;
+					const FVector2D End = Off + FVector2D(X, Y);
+					if (CurSub != INDEX_NONE) { SampleQuadraticBezier(Cur, C1, End, OutSubpaths[CurSub]); }
+					PrevQuadCtrl = C1;
+					bHasQuadCtrl = true;
+					bHasCubicCtrl = false;
+					Cur = End;
+				}
+				else if (U == TEXT('A'))
+				{
+					float Rx, Ry, Rot, LargeF, SweepF, X, Y;
+					if (!ReadPathNumber(D, Pos, Rx) || !ReadPathNumber(D, Pos, Ry) || !ReadPathNumber(D, Pos, Rot) ||
+						!ReadPathNumber(D, Pos, LargeF) || !ReadPathNumber(D, Pos, SweepF) ||
+						!ReadPathNumber(D, Pos, X) || !ReadPathNumber(D, Pos, Y)) { break; }
+					const FVector2D End = bRel ? Cur + FVector2D(X, Y) : FVector2D(X, Y);
+					if (CurSub != INDEX_NONE) { SampleEllipticalArc(Cur, Rx, Ry, Rot, LargeF != 0.0f, SweepF != 0.0f, End, OutSubpaths[CurSub]); }
+					bHasCubicCtrl = bHasQuadCtrl = false;
+					Cur = End;
+				}
+				else
+				{
+					UE_LOG(LogSCADASvg, Warning, TEXT("path 含未支持命令 '%c'，其后数据跳过"), U);
+					return;
+				}
+				bFirstOfM = false;
+				if (!NextIsNumber(Pos))
+				{
+					break; // 命令组结束，回到外层读下一命令字母
+				}
+			}
+		}
+	}
+
 	/** 解析 g 的 transform 列表：全部 translate 累加进 OutTranslation；识别 rotate(a[,cx,cy])；
 	 *  scale/matrix/skew 警告忽略。translate 与 rotate 混排时的顺序语义按近似处理（先平移后旋转）。 */
 	static void ParseGroupTransform(const FString& Value, const FString& GroupId,
@@ -326,6 +615,7 @@ namespace SCADASvgImport
 		}
 
 		ESCADASvgNodeKind Kind;
+		bool bIsPath = false;
 		if (Tag.Equals(TEXT("g"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Group; }
 		else if (Tag.Equals(TEXT("rect"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Rect; }
 		else if (Tag.Equals(TEXT("circle"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Circle; }
@@ -333,26 +623,29 @@ namespace SCADASvgImport
 		else if (Tag.Equals(TEXT("line"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Line; }
 		else if (Tag.Equals(TEXT("polyline"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Polyline; }
 		else if (Tag.Equals(TEXT("polygon"), ESearchCase::IgnoreCase)) { Kind = ESCADASvgNodeKind::Polygon; }
+		else if (Tag.Equals(TEXT("path"), ESearchCase::IgnoreCase)) { bIsPath = true; Kind = ESCADASvgNodeKind::Polygon; }
 		else
 		{
 			// title/desc/defs/metadata 等静默跳过；其余提示
 			static const TSet<FString> SilentTags = { TEXT("title"), TEXT("desc"), TEXT("defs"), TEXT("metadata"), TEXT("xml") };
 			if (!SilentTags.Contains(Tag.ToLower()))
 			{
-				UE_LOG(LogSCADASvg, Warning, TEXT("不支持的 SVG 元素 <%s>，已跳过（支持 rect/circle/ellipse/line/polyline/polygon/g）"), *Tag);
+				UE_LOG(LogSCADASvg, Warning, TEXT("不支持的 SVG 元素 <%s>，已跳过（支持 rect/circle/ellipse/line/polyline/polygon/path/g）"), *Tag);
 			}
 			return;
 		}
 
 		const FString Id = XmlNode->GetAttribute(TEXT("id"));
 
-		// —— 样式：父样式 + 本元素覆盖（fill/stroke/stroke-width/fill-opacity/stroke-opacity）——
+		// —— 样式：父样式 + 本元素覆盖（fill/stroke/stroke-width/opacity/fill-opacity/stroke-opacity）——
 		FSCADASvgStyle Style = ParentStyle;
 		{
+			const FString Opacity = XmlNode->GetAttribute(TEXT("opacity"));
+			const float Op = Opacity.IsEmpty() ? 1.0f : FMath::Clamp(FCString::Atof(*Opacity), 0.0f, 1.0f);
 			const FString FillOpacity = XmlNode->GetAttribute(TEXT("fill-opacity"));
-			const float FOp = FillOpacity.IsEmpty() ? 1.0f : FCString::Atof(*FillOpacity);
+			const float FOp = (FillOpacity.IsEmpty() ? 1.0f : FCString::Atof(*FillOpacity)) * Op;
 			const FString StrokeOpacity = XmlNode->GetAttribute(TEXT("stroke-opacity"));
-			const float SOp = StrokeOpacity.IsEmpty() ? 1.0f : FCString::Atof(*StrokeOpacity);
+			const float SOp = (StrokeOpacity.IsEmpty() ? 1.0f : FCString::Atof(*StrokeOpacity)) * Op;
 
 			const FString FillValue = XmlNode->GetAttribute(TEXT("fill"));
 			if (!FillValue.IsEmpty())
@@ -381,6 +674,49 @@ namespace SCADASvgImport
 			{
 				Style.StrokeWidth = FMath::Max(ParseLength(StrokeWidthValue, 1.0f), 0.0f);
 			}
+		}
+
+		// —— path：d 解析为子路径点列，闭合或有填充 → 多边形，否则 → 折线（一条 path 可产多个图元）——
+		if (bIsPath)
+		{
+			if (!Style.Fill.IsSet() && !Style.Stroke.IsSet())
+			{
+				UE_LOG(LogSCADASvg, Warning, TEXT("Path '%s' 无 fill 且无 stroke（不可见），已跳过"), *Id);
+				return;
+			}
+			TArray<TArray<FVector2D>> Subpaths;
+			TArray<bool> Closed;
+			ParsePathData(XmlNode->GetAttribute(TEXT("d")), Subpaths, Closed);
+			int32 Produced = 0;
+			for (int32 i = 0; i < Subpaths.Num(); ++i)
+			{
+				if (Subpaths[i].Num() < 2)
+				{
+					continue;
+				}
+				FSCADASvgNode Node;
+				Node.Id = Id;
+				Node.Style = Style;
+				// 闭合子路径或有填充 → 多边形（多边形自带边框）；仅描边的开口子路径 → 折线
+				const bool bFilled = Closed[i] || Style.Fill.IsSet();
+				Node.Kind = bFilled ? ESCADASvgNodeKind::Polygon : ESCADASvgNodeKind::Polyline;
+				if (!bFilled)
+				{
+					Node.Style.Fill.Reset();
+				}
+				Node.Points = MoveTemp(Subpaths[i]);
+				for (FVector2D& P : Node.Points)
+				{
+					P += AccumOffset;
+				}
+				OutNodes.Add(MoveTemp(Node));
+				++Produced;
+			}
+			if (Produced == 0)
+			{
+				UE_LOG(LogSCADASvg, Warning, TEXT("Path '%s' 的 d 属性无可解析几何，已跳过"), *Id);
+			}
+			return;
 		}
 
 		// —— 分组：translate 烘平 / rotate 保留容器节点 ——

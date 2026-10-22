@@ -849,6 +849,8 @@ namespace SCADASvgImport
 		const FString Id = XmlNode->GetAttribute(TEXT("id"));
 
 		// —— 样式：父样式 + 本元素覆盖（fill/stroke/stroke-width/opacity/fill-opacity/stroke-opacity）——
+		// "inherit" 关键字（SVG2/CSS）= 取父级计算值：与缺省同路径处理（我们的样式本就沿组继承，
+		// 保持父样式不动即可），不会再落入"无法解析颜色值"被当 none 清空填充
 		FSCADASvgStyle Style = ParentStyle;
 		{
 			const FString Opacity = XmlNode->GetAttribute(TEXT("opacity"));
@@ -859,7 +861,7 @@ namespace SCADASvgImport
 			const float SOp = (StrokeOpacity.IsEmpty() ? 1.0f : FCString::Atof(*StrokeOpacity)) * Op;
 
 			const FString FillValue = XmlNode->GetAttribute(TEXT("fill"));
-			if (!FillValue.IsEmpty())
+			if (!FillValue.IsEmpty() && !FillValue.Equals(TEXT("inherit"), ESearchCase::IgnoreCase))
 			{
 				bool bRecognized = true;
 				TOptional<FSCADASvgLinearGradient> FillGrad;
@@ -890,7 +892,7 @@ namespace SCADASvgImport
 			}
 
 			const FString StrokeValue = XmlNode->GetAttribute(TEXT("stroke"));
-			if (!StrokeValue.IsEmpty())
+			if (!StrokeValue.IsEmpty() && !StrokeValue.Equals(TEXT("inherit"), ESearchCase::IgnoreCase))
 			{
 				bool bRecognized = true;
 				Style.Stroke = ParsePaintValue(StrokeValue, Gradients, SOp, bRecognized);

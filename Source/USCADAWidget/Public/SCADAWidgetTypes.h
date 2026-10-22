@@ -46,6 +46,77 @@ enum class ESCADAFillPattern : uint8
 	Transparent UMETA(DisplayName = "透明 Transparent")
 };
 
+/** 线性渐变的一个停靠点 */
+USTRUCT(BlueprintType)
+struct FSCADAGradientStop
+{
+	GENERATED_BODY()
+
+	/** 位置（0-1，沿渐变轴） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Offset = 0.0f;
+
+	/** 颜色（含透明度） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FLinearColor Color = FLinearColor::White;
+};
+
+/**
+ * 线性渐变填充（填充类图元：多边形/椭圆/圆/矩形）。
+ * 渐变轴用相对图形包围盒的 0-1 归一化坐标（SVG objectBoundingBox 语义），图形移动/缩放渐变随之。
+ * 绘制 = 填充三角扇逐顶点算色（顶点投影到渐变轴 → 采样 stops）：线性函数经三角形
+ * 线性插值是数学精确的，无需加密网格。启用时自动跳过 RoundedBox SDF 快速路径
+ * （MakeBox 无逐顶点色概念，回退采样管线，观感不变）。
+ */
+USTRUCT(BlueprintType)
+struct FSCADALinearGradient
+{
+	GENERATED_BODY()
+
+	/** 启用后填充色改用渐变（FillColor 仅作轮廓 AA 覆层等处的代表色，建议保持为渐变平均色） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool bEnabled = false;
+
+	/** 渐变轴起点（相对包围盒，0-1） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (EditCondition = "bEnabled"))
+	FVector2D AxisStart = FVector2D(0.0, 0.0);
+
+	/** 渐变轴终点（相对包围盒，0-1） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (EditCondition = "bEnabled"))
+	FVector2D AxisEnd = FVector2D(1.0, 0.0);
+
+	/** 停靠点（按 Offset 升序；少于 2 个时渐变不生效） */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (EditCondition = "bEnabled"))
+	TArray<FSCADAGradientStop> Stops;
+
+	/** 采样 T（0-1，自动 clamp）处的颜色：相邻 stops 线性插值，两端按端点色平铺（pad） */
+	FLinearColor Sample(float T) const
+	{
+		if (Stops.Num() == 0)
+		{
+			return FLinearColor::White;
+		}
+		if (Stops.Num() == 1 || T <= Stops[0].Offset)
+		{
+			return Stops[0].Color;
+		}
+		for (int32 i = 1; i < Stops.Num(); ++i)
+		{
+			if (T <= Stops[i].Offset)
+			{
+				const float Span = Stops[i].Offset - Stops[i - 1].Offset;
+				const float LocalT = Span > KINDA_SMALL_NUMBER ? (T - Stops[i - 1].Offset) / Span : 0.0f;
+				// SVG 渐变 = 逐分量直线插值（不用 HSV 插值，避免色相绕路）
+				return Stops[i - 1].Color + (Stops[i].Color - Stops[i - 1].Color) * FMath::Clamp(LocalT, 0.0f, 1.0f);
+			}
+		}
+		return Stops.Last().Color;
+	}
+
+	/** 是否生效（启用且停靠点足够） */
+	bool IsActive() const { return bEnabled && Stops.Num() >= 2; }
+};
+
 /** 画布缩放模式（分辨率自适应）：以 CanvasSize 为设计基准，按实际分配尺寸自动算缩放系数 */
 UENUM(BlueprintType)
 enum class ESCADACanvasScaleMode : uint8

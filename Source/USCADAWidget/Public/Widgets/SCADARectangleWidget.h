@@ -99,6 +99,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle")
 	ESCADAFillPattern FillPattern = ESCADAFillPattern::Solid;
 
+	/** 线性渐变填充：启用后填充色改用渐变（SVG 导入的渐变素材自动写入；FillColor 保持为
+	 *  渐变平均色，作轮廓 AA 覆层代表色与渐变停用时的回退色） */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|Rectangle")
+	FSCADALinearGradient FillGradient;
+
 	/** 闪烁：开启后每 1 秒在正常色与闪烁色之间切换（全局所有图元同步）。
 	 *  只切填充到 FlashColor，边框保持 BorderColor（WinCC 语义：黑边白圆红闪 = 黑边红闪）；
 	 *  FlashColor 透明度设为 0 即为“时隐时现”。FillPattern=透明时没有填充可闪（无可见闪烁）。 */

@@ -39,6 +39,7 @@ void USCADACircleWidget::SynchronizeProperties()
 		MyCircle->SetLineStyle(LineStyle);
 		MyCircle->SetFillColor(FillColor);
 		MyCircle->SetFillPattern(FillPattern);
+		MyCircle->SetFillGradient(FillGradient);
 		MyCircle->SetFlashEnabled(bFlashEnabled);
 		MyCircle->SetFlashColor(FlashColor);
 		MyCircle->SetFlashInverted(bFlashInverted);

@@ -34,6 +34,7 @@ void USCADAPolygonWidget::SynchronizeProperties()
 		MyPolygon->SetLineStyle(LineStyle);
 		MyPolygon->SetFillColor(FillColor);
 		MyPolygon->SetFillPattern(FillPattern);
+		MyPolygon->SetFillGradient(FillGradient);
 		MyPolygon->SetFlashEnabled(bFlashEnabled);
 		MyPolygon->SetFlashColor(FlashColor);
 		MyPolygon->SetFlashInverted(bFlashInverted);

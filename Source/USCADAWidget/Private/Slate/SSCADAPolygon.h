@@ -53,6 +53,9 @@ public:
 	void SetFillColor(const TAttribute<FLinearColor>& InColor);
 	/** 填充图案：实心 / 透明 */
 	void SetFillPattern(const TAttribute<ESCADAFillPattern>& InPattern);
+	/** 线性渐变填充（值语义推送；启用后填充三角扇逐顶点算色，数学精确——
+	 *  线性函数经三角形线性插值无误差；轮廓 AA 覆层仍用 FillColor 代表色） */
+	void SetFillGradient(const FSCADALinearGradient& InGradient) { FillGradient = InGradient; }
 
 	/** 强制平滑轮廓（跳过 Slate 层整数取整，保留亚像素几何；SVG path 采样导入的小尺寸
 	 *  图形用——密集采样顶点取整会塌陷变形）。默认 false 保持像素对齐约定。 */
@@ -97,9 +100,12 @@ private:
 
 	/** 画按索引展开的实心三角形列表（一次 MakeCustomVerts，白纹理回退，纯色顶点 tint）：
 	 *  TriVerts 已按三角形顺序逐顶点展开，IdentityIndices 为配套的恒等索引列（0..N-1），
-	 *  二者均来自几何缓存（SCADAStroke::ExpandTriangleList 在缓存重建时一次性生成）。 */
+	 *  二者均来自几何缓存（SCADAStroke::ExpandTriangleList 在缓存重建时一次性生成）。
+	 *  Gradient 非空时逐顶点算色（顶点局部坐标投影到渐变轴采样，线性插值数学精确），
+	 *  此时 InColor 不用；GradientBBox = 渐变轴归一化坐标的参照包围盒（局部空间）。 */
 	void DrawTriangleList(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-		const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const;
+		const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects,
+		const FSCADALinearGradient* Gradient = nullptr, const FVector2D* GradientBBoxMin = nullptr, const FVector2D* GradientBBoxSize = nullptr) const;
 
 	/** 闭合轮廓整体偏移 OffsetDistance（边框外画用，正=向内 / 负=向外）：逐顶点取相邻
 	 *  两边偏移线的斜接交点（miter，限幅 4x 防尖角爆炸），凹顶点由同一公式自然处理。
@@ -113,6 +119,8 @@ private:
 	TAttribute<FLinearColor> FillColor;
 	/** 填充图案：实心 / 透明 */
 	TAttribute<ESCADAFillPattern> FillPattern;
+	/** 线性渐变填充（bEnabled 且 stops ≥2 时替代纯色填充；闪烁相位仍切纯色 FlashColor） */
+	FSCADALinearGradient FillGradient;
 
 	/** 几何脏标记缓存：OnPaint 的重几何（耳切三角化 / 内缩环带 BuildOffsetContour / 环带顶点
 	 *  索引构建 / 虚线圆角环与划段拆分）只在键变化时重算，命中时直接用缓存几何重建 draw

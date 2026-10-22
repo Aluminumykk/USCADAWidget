@@ -34,6 +34,7 @@ void USCADAEllipseWidget::SynchronizeProperties()
 		MyEllipse->SetLineStyle(LineStyle);
 		MyEllipse->SetFillColor(FillColor);
 		MyEllipse->SetFillPattern(FillPattern);
+		MyEllipse->SetFillGradient(FillGradient);
 		MyEllipse->SetFlashEnabled(bFlashEnabled);
 		MyEllipse->SetFlashColor(FlashColor);
 		MyEllipse->SetFlashInverted(bFlashInverted);

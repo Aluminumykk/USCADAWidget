@@ -89,35 +89,58 @@ namespace SCADASvgImport
 		return TryGetNamedColor(V, OutColor);
 	}
 
-	/** 渐变 stops 的加权平均色（trapezoid 积分，P0 渐变近似；url(#id) 引用查不到时返回空） */
-	struct FGradientStops
+	/** stops 加权平均色（trapezoid 积分；径向渐变回退色 & 线性渐变的 FillColor 代表色） */
+	static FLinearColor AverageStops(const TArray<TPair<float, FLinearColor>>& Stops)
 	{
-		TArray<TPair<float, FLinearColor>> Stops; // (offset, color)，按 offset 升序
-
-		FLinearColor AverageColor() const
+		if (Stops.Num() == 0)
 		{
-			if (Stops.Num() == 0)
-			{
-				return FLinearColor::Gray;
-			}
-			if (Stops.Num() == 1)
-			{
-				return Stops[0].Value;
-			}
-			FLinearColor Sum(0.f, 0.f, 0.f, 0.f);
-			for (int32 i = 0; i + 1 < Stops.Num(); ++i)
-			{
-				const float W = Stops[i + 1].Key - Stops[i].Key;
-				Sum += (Stops[i].Value + Stops[i + 1].Value) * (0.5f * W);
-			}
-			return Sum;
+			return FLinearColor::Gray;
 		}
+		if (Stops.Num() == 1)
+		{
+			return Stops[0].Value;
+		}
+		FLinearColor Sum(0.f, 0.f, 0.f, 0.f);
+		for (int32 i = 0; i + 1 < Stops.Num(); ++i)
+		{
+			const float W = Stops[i + 1].Key - Stops[i].Key;
+			Sum += (Stops[i].Value + Stops[i + 1].Value) * (0.5f * W);
+		}
+		return Sum;
+	}
+
+	/** 渐变定义（linearGradient 完整解析；radialGradient 只留 stops 算平均色） */
+	struct FGradientDef
+	{
+		bool bRadial = false;
+		FSCADASvgLinearGradient Linear; // 径向时仅 Stops 有效
+		FLinearColor Average = FLinearColor::Gray;
 	};
 
-	/** 从 defs 节点收集渐变表（id → 平均色）。xlink:href 渐变继承不支持（P0，引用空的渐变会按全黑平均色兜底并可在日志中发现） */
-	static TMap<FString, FLinearColor> CollectGradients(const FXmlNode* Root)
+	/** 从 defs 节点收集渐变表（id → 定义）。解析 x1/y1/x2/y2（% 与 0-1 小数同义）、gradientUnits
+	 *  （objectBoundingBox 缺省 / userSpaceOnUse）与 xlink:href/href 继承（自身未给出的 stops 与
+	 *  属性从引用渐变补齐，链式解析，Visited 防环）；gradientTransform 暂不支持（警告忽略）。
+	 *  径向渐变（cx/cy/r/fx/fy）不完整解析——只收集 stops 供平均色回退。 */
+	static TMap<FString, FGradientDef> CollectGradients(const FXmlNode* Root)
 	{
-		TMap<FString, FGradientStops> Raw;
+		struct FGradientRaw
+		{
+			bool bRadial = false;
+			TArray<TPair<float, FLinearColor>> Stops;
+			TOptional<FVector2D> AxisStart, AxisEnd;
+			TOptional<bool> bUserSpace;
+			FString Href;
+		};
+		TMap<FString, FGradientRaw> Raw;
+
+		// 轴坐标：% → /100；小数值原样（objectBoundingBox 下即 0-1 分数；userSpace 下为绝对坐标）
+		auto ParseAxisNumber = [](const FString& S) -> float
+		{
+			FString V = S;
+			const bool bPercent = V.RemoveFromEnd(TEXT("%"));
+			const float F = FCString::Atof(*V);
+			return bPercent ? F / 100.0f : F;
+		};
 
 		for (const FXmlNode* Node : Root->GetChildrenNodes())
 		{
@@ -128,7 +151,9 @@ namespace SCADASvgImport
 			for (const FXmlNode* Def : Node->GetChildrenNodes())
 			{
 				const FString& Tag = Def->GetTag();
-				if (!Tag.Equals(TEXT("linearGradient"), ESearchCase::IgnoreCase) && !Tag.Equals(TEXT("radialGradient"), ESearchCase::IgnoreCase))
+				const bool bLinear = Tag.Equals(TEXT("linearGradient"), ESearchCase::IgnoreCase);
+				const bool bRadial = !bLinear && Tag.Equals(TEXT("radialGradient"), ESearchCase::IgnoreCase);
+				if (!bLinear && !bRadial)
 				{
 					continue;
 				}
@@ -137,7 +162,43 @@ namespace SCADASvgImport
 				{
 					continue;
 				}
-				FGradientStops& G = Raw.FindOrAdd(Id);
+				FGradientRaw& G = Raw.FindOrAdd(Id);
+				G.bRadial = bRadial;
+
+				FString Href = Def->GetAttribute(TEXT("xlink:href"));
+				if (Href.IsEmpty())
+				{
+					Href = Def->GetAttribute(TEXT("href"));
+				}
+				Href.RemoveFromStart(TEXT("#"));
+				G.Href = Href;
+
+				if (Def->GetAttribute(TEXT("gradientUnits")).Equals(TEXT("userSpaceOnUse"), ESearchCase::IgnoreCase))
+				{
+					G.bUserSpace = true;
+				}
+				if (!Def->GetAttribute(TEXT("gradientTransform")).IsEmpty())
+				{
+					UE_LOG(LogSCADASvg, Warning, TEXT("渐变 '%s' 的 gradientTransform 暂不支持，已忽略"), *Id);
+				}
+
+				// 渐变轴 x1/y1/x2/y2（缺省 0%,0% → 100%,0%；单分量独立缺省）
+				if (bLinear)
+				{
+					const FString X1 = Def->GetAttribute(TEXT("x1"));
+					const FString Y1 = Def->GetAttribute(TEXT("y1"));
+					const FString X2 = Def->GetAttribute(TEXT("x2"));
+					const FString Y2 = Def->GetAttribute(TEXT("y2"));
+					if (!X1.IsEmpty() || !Y1.IsEmpty())
+					{
+						G.AxisStart = FVector2D(X1.IsEmpty() ? 0.0 : ParseAxisNumber(X1), Y1.IsEmpty() ? 0.0 : ParseAxisNumber(Y1));
+					}
+					if (!X2.IsEmpty() || !Y2.IsEmpty())
+					{
+						G.AxisEnd = FVector2D(X2.IsEmpty() ? 1.0 : ParseAxisNumber(X2), Y2.IsEmpty() ? 0.0 : ParseAxisNumber(Y2));
+					}
+				}
+
 				for (const FXmlNode* Stop : Def->GetChildrenNodes())
 				{
 					if (!Stop->GetTag().Equals(TEXT("stop"), ESearchCase::IgnoreCase))
@@ -155,7 +216,7 @@ namespace SCADASvgImport
 					const FString StopColor = Stop->GetAttribute(TEXT("stop-color"));
 					if (StopColor.IsEmpty() || !TryParseColor(StopColor, C))
 					{
-						UE_LOG(LogSCADASvg, Warning, TEXT("渐变 '%s' 的 stop 无有效 stop-color（可能在命名空间扩展属性中），按黑色参与平均"), *Id);
+						UE_LOG(LogSCADASvg, Warning, TEXT("渐变 '%s' 的 stop 无有效 stop-color（可能在命名空间扩展属性中），按黑色参与"), *Id);
 					}
 					const FString StopOpacity = Stop->GetAttribute(TEXT("stop-opacity"));
 					if (!StopOpacity.IsEmpty())
@@ -168,16 +229,53 @@ namespace SCADASvgImport
 			}
 		}
 
-		TMap<FString, FLinearColor> Result;
+		// href 继承解析：自身显式给出的项优先，缺失项沿链补齐（Visited 防环，原地解析天然限深）
+		TFunction<void(const FString&, FGradientRaw&, TSet<FString>&)> ResolveHref = [&](const FString& Id, FGradientRaw& G, TSet<FString>& Visited)
+		{
+			if (G.Href.IsEmpty() || Visited.Contains(G.Href))
+			{
+				return;
+			}
+			Visited.Add(G.Href);
+			FGradientRaw* Target = Raw.Find(G.Href);
+			if (Target == nullptr)
+			{
+				return;
+			}
+			ResolveHref(G.Href, *Target, Visited);
+			if (G.Stops.Num() == 0) { G.Stops = Target->Stops; }
+			if (!G.AxisStart.IsSet()) { G.AxisStart = Target->AxisStart; }
+			if (!G.AxisEnd.IsSet()) { G.AxisEnd = Target->AxisEnd; }
+			if (!G.bUserSpace.IsSet()) { G.bUserSpace = Target->bUserSpace; }
+		};
+		for (auto& Pair : Raw)
+		{
+			TSet<FString> Visited;
+			Visited.Add(Pair.Key);
+			ResolveHref(Pair.Key, Pair.Value, Visited);
+		}
+
+		TMap<FString, FGradientDef> Result;
 		for (const auto& Pair : Raw)
 		{
-			Result.Add(Pair.Key, Pair.Value.AverageColor());
+			const FGradientRaw& G = Pair.Value;
+			FGradientDef D;
+			D.bRadial = G.bRadial;
+			D.Linear.Stops = G.Stops;
+			D.Linear.AxisStart = G.AxisStart.Get(FVector2D(0.0, 0.0));
+			D.Linear.AxisEnd = G.AxisEnd.Get(FVector2D(1.0, 0.0));
+			D.Linear.bObjectBoundingBox = !G.bUserSpace.Get(false);
+			D.Average = AverageStops(G.Stops);
+			Result.Add(Pair.Key, D);
 		}
 		return Result;
 	}
 
-	/** 解析样式类属性值 → 颜色或 none 或渐变引用 */
-	static TOptional<FLinearColor> ParsePaintValue(const FString& Value, const TMap<FString, FLinearColor>& Gradients, float Opacity, bool& bOutRecognized)
+	/** 解析样式类属性值 → 颜色或 none 或渐变引用。OutGradient 非空（仅填充传入，描边不要渐变）
+	 *  且引用的是 stops ≥2 的线性渐变时输出渐变定义（Opacity 已烘入 stops 透明度）；
+	 *  径向渐变不输出（回退平均色）。 */
+	static TOptional<FLinearColor> ParsePaintValue(const FString& Value, const TMap<FString, FGradientDef>& Gradients, float Opacity, bool& bOutRecognized,
+		TOptional<FSCADASvgLinearGradient>* OutGradient = nullptr)
 	{
 		TOptional<FLinearColor> Result;
 		bOutRecognized = true;
@@ -191,9 +289,13 @@ namespace SCADASvgImport
 			FString Ref = V.Mid(4).TrimStartAndEnd();
 			Ref.RemoveFromEnd(TEXT(")"));
 			Ref.RemoveFromStart(TEXT("#"));
-			if (const FLinearColor* Avg = Gradients.Find(Ref))
+			if (const FGradientDef* Def = Gradients.Find(Ref))
 			{
-				Result = *Avg;
+				Result = Def->Average;
+				if (OutGradient != nullptr && !Def->bRadial && Def->Linear.Stops.Num() >= 2)
+				{
+					*OutGradient = Def->Linear;
+				}
 			}
 			else
 			{
@@ -217,6 +319,13 @@ namespace SCADASvgImport
 		if (Result.IsSet() && Opacity < 1.0f)
 		{
 			Result->A *= Opacity;
+		}
+		if (OutGradient != nullptr && OutGradient->IsSet() && Opacity < 1.0f)
+		{
+			for (TPair<float, FLinearColor>& S : OutGradient->GetValue().Stops)
+			{
+				S.Value.A *= Opacity;
+			}
 		}
 		return Result;
 	}
@@ -597,7 +706,7 @@ namespace SCADASvgImport
 	 *  组本身不产出、子节点直接挂父级）。样式沿组继承；AccumOffset = 父链 translate 与
 	 *  viewBox min 修正的累计平移（顶层调用传 -ViewBoxMin），烘入叶子坐标。 */
 	static void ParseElement(const FXmlNode* XmlNode, const FSCADASvgStyle& ParentStyle,
-		const TMap<FString, FLinearColor>& Gradients, const FVector2D& AccumOffset, const FVector2D& ViewBoxMin,
+		const TMap<FString, FGradientDef>& Gradients, const FVector2D& AccumOffset, const FVector2D& ViewBoxMin,
 		TArray<FSCADASvgNode>& OutNodes)
 	{
 		const FString& Tag = XmlNode->GetTag();
@@ -651,11 +760,31 @@ namespace SCADASvgImport
 			if (!FillValue.IsEmpty())
 			{
 				bool bRecognized = true;
-				Style.Fill = ParsePaintValue(FillValue, Gradients, FOp, bRecognized);
+				TOptional<FSCADASvgLinearGradient> FillGrad;
+				Style.Fill = ParsePaintValue(FillValue, Gradients, FOp, bRecognized, &FillGrad);
+				if (FillGrad.IsSet() && !FillGrad->bObjectBoundingBox)
+				{
+					// userSpaceOnUse 轴 = 原始 SVG 坐标：与叶子坐标同样做 -ViewBoxMin 修正
+					// （轴在元素用户空间内解释、包围盒含组链累计平移，两边语义一致）
+					FillGrad->AxisStart -= ViewBoxMin;
+					FillGrad->AxisEnd -= ViewBoxMin;
+				}
+				Style.FillGradient = FillGrad;
 			}
-			else if (Style.Fill.IsSet() && FOp < 1.0f)
+			else if (FOp < 1.0f)
 			{
-				Style.Fill->A *= FOp;
+				// 继承样式的 fill-opacity 级联：纯色与渐变 stops 的透明度都要乘
+				if (Style.Fill.IsSet())
+				{
+					Style.Fill->A *= FOp;
+				}
+				if (Style.FillGradient.IsSet())
+				{
+					for (TPair<float, FLinearColor>& S : Style.FillGradient->Stops)
+					{
+						S.Value.A *= FOp;
+					}
+				}
 			}
 
 			const FString StrokeValue = XmlNode->GetAttribute(TEXT("stroke"));
@@ -859,7 +988,7 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 		}
 	}
 
-	const TMap<FString, FLinearColor> Gradients = SCADASvgImport::CollectGradients(Root);
+	const TMap<FString, SCADASvgImport::FGradientDef> Gradients = SCADASvgImport::CollectGradients(Root);
 
 	// SVG 规范缺省样式：fill = 纯黑，stroke = none
 	FSCADASvgStyle RootStyle;

@@ -10,7 +10,8 @@
  * path（d 全命令 M/L/H/V/C/S/Q/T/A/Z，贝塞尔与椭圆弧导入期采样折线化，闭合或有填充 →
  * 多边形、仅描边开口 → 折线，一条 path 可产多个图元）/ g（分组：translate 烘平、rotate 保留容器），
  * 样式 fill / stroke / stroke-width / opacity / fill-opacity / stroke-opacity（沿组继承），
- * defs 内 linearGradient / radialGradient 解析为加权平均纯色（真渐变排 P1）。
+ * defs 内 linearGradient 完整解析为线性渐变（stops + 渐变轴 + gradientUnits + href 继承，
+ * 逐顶点色精确绘制），radialGradient 回退为加权平均纯色（真径向渐变排 P2）。
  * 坐标一律为 viewBox 空间（左上角原点、Y 向下，与 SCADA 画布设计坐标同构）。
  */
 
@@ -26,12 +27,27 @@ enum class ESCADASvgNodeKind : uint8
 	Polygon
 };
 
+/** SVG 线性渐变定义（填充用；解析期产物，工厂折算成控件的 FSCADALinearGradient） */
+struct FSCADASvgLinearGradient
+{
+	/** 停靠点（offset 0-1 升序，颜色含 stop-opacity 与 fill-opacity） */
+	TArray<TPair<float, FLinearColor>> Stops;
+	/** 渐变轴起点/终点：bObjectBoundingBox = 相对元素包围盒的 0-1 归一化；
+	 *  否则 = viewBox 空间绝对坐标（已做 -ViewBoxMin 修正），工厂按元素包围盒折算归一化 */
+	FVector2D AxisStart = FVector2D(0.0, 0.0);
+	FVector2D AxisEnd = FVector2D(1.0, 0.0);
+	bool bObjectBoundingBox = true;
+};
+
 /** 表现样式（组继承已解析）：Fill/Stroke 未设置 = SVG 语义 none（不画） */
 struct FSCADASvgStyle
 {
-	/** 填充色（SVG 缺省 = 纯黑，解析时按规范填入；fill="none" → Reset） */
+	/** 填充色（SVG 缺省 = 纯黑，解析时按规范填入；fill="none" → Reset）。
+	 *  渐变填充时 = 渐变加权平均色（控件 FillColor 代表色/渐变停用回退色/轮廓 AA 覆层色） */
 	TOptional<FLinearColor> Fill;
-	/** 描边色（SVG 缺省 = none） */
+	/** 线性渐变填充（fill="url(#linearGradient)" 时设置；径向渐变不支持真渐变，只给 Fill 平均色） */
+	TOptional<FSCADASvgLinearGradient> FillGradient;
+	/** 描边色（SVG 缺省 = none；渐变描边取平均色） */
 	TOptional<FLinearColor> Stroke;
 	/** 描边宽度 */
 	float StrokeWidth = 1.0f;

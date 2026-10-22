@@ -34,6 +34,7 @@ void USCADARectangleWidget::SynchronizeProperties()
 		MyRectangle->SetLineStyle(LineStyle);
 		MyRectangle->SetFillColor(FillColor);
 		MyRectangle->SetFillPattern(FillPattern);
+		MyRectangle->SetFillGradient(FillGradient);
 		MyRectangle->SetFlashEnabled(bFlashEnabled);
 		MyRectangle->SetFlashColor(FlashColor);
 		MyRectangle->SetFlashInverted(bFlashInverted);

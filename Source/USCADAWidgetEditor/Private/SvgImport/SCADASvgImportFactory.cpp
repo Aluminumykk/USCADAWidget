@@ -49,9 +49,12 @@ namespace SCADASvgImport
 		return FName(*Candidate);
 	}
 
-	/** 应用填充/描边样式到带填充语义的图元（Rect/Circle/Ellipse/Polygon 成员同名，模板复用） */
+	/** 应用填充/描边样式到带填充语义的图元（Rect/Circle/Ellipse/Polygon 成员同名，模板复用）。
+	 *  BBoxMin/BBoxSize = 元素包围盒（viewBox 空间）：线性渐变 userSpaceOnUse 轴据此折算成
+	 *  相对包围盒的 0-1 归一化（控件 FillGradient 的坐标语义；objectBoundingBox 轴直接使用）。 */
 	template <typename TWidget>
-	static void ApplyFillBorderStyle(TWidget* Widget, const FSCADASvgStyle& Style)
+	static void ApplyFillBorderStyle(TWidget* Widget, const FSCADASvgStyle& Style,
+		const FVector2D& BBoxMin, const FVector2D& BBoxSize)
 	{
 		if (Style.Fill.IsSet())
 		{
@@ -61,6 +64,38 @@ namespace SCADASvgImport
 		else
 		{
 			Widget->FillPattern = ESCADAFillPattern::Transparent;
+		}
+
+		if (Style.FillGradient.IsSet())
+		{
+			const FSCADASvgLinearGradient& SG = Style.FillGradient.GetValue();
+			FSCADALinearGradient G;
+			G.bEnabled = true;
+			if (SG.bObjectBoundingBox)
+			{
+				G.AxisStart = SG.AxisStart;
+				G.AxisEnd = SG.AxisEnd;
+			}
+			else
+			{
+				auto ToNormalized = [&](const FVector2D& A)
+				{
+					return FVector2D(
+						BBoxSize.X > KINDA_SMALL_NUMBER ? (A.X - BBoxMin.X) / BBoxSize.X : 0.5,
+						BBoxSize.Y > KINDA_SMALL_NUMBER ? (A.Y - BBoxMin.Y) / BBoxSize.Y : 0.5);
+				};
+				G.AxisStart = ToNormalized(SG.AxisStart);
+				G.AxisEnd = ToNormalized(SG.AxisEnd);
+			}
+			G.Stops.Reserve(SG.Stops.Num());
+			for (const TPair<float, FLinearColor>& S : SG.Stops)
+			{
+				FSCADAGradientStop Stop;
+				Stop.Offset = S.Key;
+				Stop.Color = S.Value;
+				G.Stops.Add(Stop);
+			}
+			Widget->FillGradient = G;
 		}
 
 		if (Style.Stroke.IsSet() && Style.StrokeWidth > 0.0f)
@@ -153,7 +188,7 @@ namespace SCADASvgImport
 			W->Size = Node.P2;
 			W->CornerRadiusX = (float)Node.CornerRadius.X;
 			W->CornerRadiusY = (float)Node.CornerRadius.Y;
-			ApplyFillBorderStyle(W, Node.Style);
+			ApplyFillBorderStyle(W, Node.Style, Node.P1, Node.P2);
 			AddToCanvas(ParentCanvas, W, Node.P1, Node.P2);
 			break;
 		}
@@ -168,7 +203,7 @@ namespace SCADASvgImport
 				USCADACircleWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Circle"), UsedNames));
 			W->Center = Node.P1;
 			W->Radius = Node.Radius;
-			ApplyFillBorderStyle(W, Node.Style);
+			ApplyFillBorderStyle(W, Node.Style, Node.P1 - FVector2D(Node.Radius, Node.Radius), FVector2D(Node.Radius * 2.0f, Node.Radius * 2.0f));
 			AddToCanvas(ParentCanvas, W, Node.P1 - FVector2D(Node.Radius, Node.Radius), FVector2D(Node.Radius * 2.0f, Node.Radius * 2.0f));
 			break;
 		}
@@ -184,7 +219,7 @@ namespace SCADASvgImport
 			W->Center = Node.P1;
 			W->RadiusX = (float)Node.P2.X;
 			W->RadiusY = (float)Node.P2.Y;
-			ApplyFillBorderStyle(W, Node.Style);
+			ApplyFillBorderStyle(W, Node.Style, Node.P1 - Node.P2, Node.P2 * 2.0);
 			AddToCanvas(ParentCanvas, W, Node.P1 - Node.P2, Node.P2 * 2.0);
 			break;
 		}
@@ -242,7 +277,6 @@ namespace SCADASvgImport
 				USCADAPolygonWidget::StaticClass(), MakeWidgetName(Node.Id, TEXT("Polygon"), UsedNames));
 			W->Points = Node.Points;
 			if (Node.bSubPixelSampling) { W->bSnapToPixel = false; }
-			ApplyFillBorderStyle(W, Node.Style);
 			FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
 			FVector2D Max(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
 			for (const FVector2D& P : Node.Points)
@@ -250,6 +284,7 @@ namespace SCADASvgImport
 				Min = FVector2D(FMath::Min(Min.X, P.X), FMath::Min(Min.Y, P.Y));
 				Max = FVector2D(FMath::Max(Max.X, P.X), FMath::Max(Max.Y, P.Y));
 			}
+			ApplyFillBorderStyle(W, Node.Style, Min, Max - Min);
 			AddToCanvas(ParentCanvas, W, Min, FVector2D(FMath::Max(Max.X - Min.X, 1.0), FMath::Max(Max.Y - Min.Y, 1.0)));
 			break;
 		}

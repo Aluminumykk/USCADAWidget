@@ -112,7 +112,7 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - 元素：`rect`（含 `rx`/`ry` 圆角）/ `circle` / `ellipse` / `line` / `polyline` / `polygon` / `path` / `g`（分组）；样式 `fill` / `stroke` / `stroke-width` / `opacity` / `fill-opacity` / `stroke-opacity`（沿组继承）
 - `path`：`d` 全命令（M/L/H/V/C/S/Q/T/A/Z，含相对命令与紧凑数字语法），贝塞尔与椭圆弧在导入期采样折线化——闭合或有填充的子路径 → 多边形、仅描边的开口子路径 → 折线，一条 path 可产多个图元；孔洞（evenodd 子路径）按实芯填充处理
 - 变换：组 `translate` 直接烘入坐标（无旋转组在导入时扁平化，不产生多余嵌套画布）；组 `rotate(a,cx,cy)` 保留为命名子画布（平移落到槽位置，旋转走 RenderTransform）；`scale` / `matrix` / `skew` 暂不支持（警告忽略）
-- 颜色：`#RGB` / `#RRGGBB` / `rgb()` / 常用命名色；`linearGradient` / `radialGradient` 近似为加权平均纯色（真渐变规划中）
+- 颜色：`#RGB` / `#RRGGBB` / `rgb()` / 常用命名色；`linearGradient` **完整导入为真线性渐变**（stops + 渐变轴 + `gradientUnits`，`href` 继承；填充图元的 `FillGradient` 属性，绘制 = 填充三角扇逐顶点算色，线性插值数学精确），`radialGradient` 回退为加权平均纯色（真径向渐变规划中）；`gradientTransform` 暂不支持（警告忽略）
 - 未知命名空间的元素与属性（`inkscape:` / `sodipodi:` 等厂商扩展）按 SVG 规范静默忽略
 - 暂不支持：`<text>`、内联 `style` 属性、`<use>`/`<symbol>`、裁剪/蒙版（clipPath/mask）——不支持的项会跳过并在输出日志（LogSCADASvg）给出警告
 

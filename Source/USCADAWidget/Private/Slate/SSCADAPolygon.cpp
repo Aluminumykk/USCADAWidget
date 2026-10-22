@@ -51,8 +51,12 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	// 黑边白圆红闪 = 黑边红闪）；全局 1 秒换相，与线同一逻辑。FlashColor 透明度 0 即填充隐藏。
 	// 翻转组（bFlashInverted）与正常组取色相反：正常相位显示闪烁色、闪烁相位显示正常色。
 	const bool bShowFlash = bFlashEnabled.Get() && (IsFlashPhaseNormal() == bFlashInverted.Get());
-	const FLinearColor BorderFinalColor = Color.Get() * InWidgetStyle.GetColorAndOpacityTint();
-	const FLinearColor FillFinalColor = (bShowFlash ? FlashColor.Get() : FillColor.Get()) * InWidgetStyle.GetColorAndOpacityTint();
+	const FLinearColor StyleTint = InWidgetStyle.GetColorAndOpacityTint();
+	const FLinearColor BorderFinalColor = Color.Get() * StyleTint;
+	const FLinearColor FillFinalColor = (bShowFlash ? FlashColor.Get() : FillColor.Get()) * StyleTint;
+	// 线性渐变填充：仅实心填充且非闪烁相位时生效（闪烁 = 纯色切 FlashColor，WinCC 语义优先）。
+	// 生效时填充三角扇逐顶点算色，同时禁用 SDF 快速路径（MakeBox 无逐顶点色概念）
+	const bool bUseGradientFill = !bShowFlash && CurFillPattern == ESCADAFillPattern::Solid && FillGradient.IsActive();
 
 	const FPaintGeometry PaintGeom = AllottedGeometry.ToPaintGeometry();
 	// MakeLines 的线宽不随几何体变换缩放（点位会），画布 Zoom（或 DPI 缩放）≠1 时手动乘累积变换缩放（与线同一规则）
@@ -73,7 +77,7 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 	//    误差 ~0.02px 不可辨），全图元边缘质量在任何缩放下统一为 1px 屏幕渐变。缩小
 	//    （RenderScale<1）时 SDF 过渡带 <1px 更锐利，无此问题，保留。
 	FAnalyticBox ABox;
-	if (CurLineStyle == ESCADALineStyle::Solid && RenderScale <= 1.5f && TryGetAnalyticBox(ABox)
+	if (CurLineStyle == ESCADALineStyle::Solid && RenderScale <= 1.5f && !bUseGradientFill && TryGetAnalyticBox(ABox)
 		&& LineThickness < FMath::Min(ABox.Size.X, ABox.Size.Y) * 0.5f)
 	{
 		const bool bDrawFill = (CurFillPattern == ESCADAFillPattern::Solid);
@@ -157,7 +161,25 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 		}
 		if (C.bFillValid)
 		{
-			DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.FillTriVerts, C.FillIdentityIndices, FillFinalColor, DrawEffects);
+			if (bUseGradientFill)
+			{
+				// 渐变轴归一化坐标的参照包围盒 = 填充轮廓包围盒（局部空间）
+				FVector2D BBoxMin(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+				FVector2D BBoxMax(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+				for (const FVector2D& P : C.Closed)
+				{
+					BBoxMin = FVector2D(FMath::Min(BBoxMin.X, P.X), FMath::Min(BBoxMin.Y, P.Y));
+					BBoxMax = FVector2D(FMath::Max(BBoxMax.X, P.X), FMath::Max(BBoxMax.Y, P.Y));
+				}
+				const FVector2D BBoxSize = BBoxMax - BBoxMin;
+				// InColor 传 StyleTint：渐变顶点色 = 采样色 × tint（禁用态/透明度仍生效）
+				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.FillTriVerts, C.FillIdentityIndices,
+					StyleTint, DrawEffects, &FillGradient, &BBoxMin, &BBoxSize);
+			}
+			else
+			{
+				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.FillTriVerts, C.FillIdentityIndices, FillFinalColor, DrawEffects);
+			}
 		}
 
 		// 填充轮廓抗锯齿覆层（CustomVerts 无抗锯齿）：沿外轮廓覆一条 3 屏幕像素宽的
@@ -330,29 +352,49 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 }
 
 void SSCADAPolygon::DrawTriangleList(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& AllottedGeometry,
-	const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const
+	const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects,
+	const FSCADALinearGradient* Gradient, const FVector2D* GradientBBoxMin, const FVector2D* GradientBBoxSize) const
 {
 	// 一次 MakeCustomVerts 实心三角扇：白色资源句柄回退（与 SSCADALine::AppendArrow 同一条路径），
 	// 顶点位置在“绘制空间”（累积渲染变换后做像素对齐，与线体顶点同一规则），纯色由顶点 tint 决定。
 	// 平滑曲线轮廓（bSmoothContourActive，见 PaintsSmoothContour）跳过顶点取整，保留亚像素几何。
 	// TriVerts 已按三角形顺序展开（几何缓存重建时一次性生成），本函数只做逐顶点 FSlateVertex
 	// 变换（累积渲染变换每帧可能变，顶点元素本就不能跨帧持有），恒等索引直接复用缓存。
+	// 渐变：顶点**局部坐标**投影到渐变轴（归一化轴 × 包围盒还原成局部坐标）采样 stops——
+	// 线性函数经三角形线性插值数学精确；轴退化（零长）时恒取起点色。
+	FVector2D AxisA = FVector2D::ZeroVector, AxisDir = FVector2D::ZeroVector;
+	float AxisLen2 = 0.0;
+	const bool bGradient = Gradient && GradientBBoxMin && GradientBBoxSize && Gradient->IsActive();
+	if (bGradient)
+	{
+		AxisA = *GradientBBoxMin + Gradient->AxisStart * (*GradientBBoxSize);
+		const FVector2D AxisB = *GradientBBoxMin + Gradient->AxisEnd * (*GradientBBoxSize);
+		AxisDir = AxisB - AxisA;
+		AxisLen2 = (float)AxisDir.SizeSquared();
+	}
+
 	const FSlateRenderTransform& RT = AllottedGeometry.GetAccumulatedRenderTransform();
 	const FColor Tint = InColor.ToFColor(true);
 	TArray<FSlateVertex> Verts;
 	Verts.Reserve(TriVerts.Num());
-	if (bSmoothContourActive)
+	for (int32 i = 0; i < TriVerts.Num(); ++i)
 	{
-		for (int32 i = 0; i < TriVerts.Num(); ++i)
+		FColor VertColor = Tint;
+		if (bGradient)
 		{
-			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, Tint));
+			const float T = AxisLen2 > KINDA_SMALL_NUMBER
+				? FMath::Clamp((float)FVector2D::DotProduct(TriVerts[i] - AxisA, AxisDir) / AxisLen2, 0.0f, 1.0f)
+				: 0.0f;
+			// 渐变顶点色 = 采样色 × InColor（此时 InColor = StyleTint，见调用处）
+			VertColor = (Gradient->Sample(T) * InColor).ToFColor(true);
 		}
-	}
-	else
-	{
-		for (int32 i = 0; i < TriVerts.Num(); ++i)
+		if (bSmoothContourActive)
 		{
-			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, Tint));
+			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, VertColor));
+		}
+		else
+		{
+			Verts.Add(FSlateVertex::Make<ESlateVertexRounding::Enabled>(RT, UE::Slate::CastToVector2f(TriVerts[i]), FVector2f::ZeroVector, VertColor));
 		}
 	}
 	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, IdentityIndices, nullptr, 0, 0, DrawEffects);

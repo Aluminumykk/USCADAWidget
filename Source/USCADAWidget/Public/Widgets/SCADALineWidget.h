@@ -102,6 +102,14 @@ public:
 	UPROPERTY()
 	FGetSCADABool bFlashInvertedDelegate;
 
+	/** 读取起点（蓝图"读-改-写"驱动用；纯读取不绕过封装，写请走 Set* 以维持取整/槽同步） */
+	UFUNCTION(BlueprintPure, Category = "SCADA|Line")
+	FVector2D GetStartPoint() const { return StartPoint; }
+
+	/** 读取终点 */
+	UFUNCTION(BlueprintPure, Category = "SCADA|Line")
+	FVector2D GetEndPoint() const { return EndPoint; }
+
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Line")
 	void SetStartPoint(FVector2D InPoint);
 

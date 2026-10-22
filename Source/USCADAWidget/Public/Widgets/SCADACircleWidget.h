@@ -122,6 +122,14 @@ public:
 	UPROPERTY()
 	FGetSCADABool bFlashInvertedDelegate;
 
+	/** 读取圆心（蓝图"读-改-写"驱动用；纯读取不绕过封装，写请走 Set* 以维持取整/槽同步） */
+	UFUNCTION(BlueprintPure, Category = "SCADA|Circle")
+	FVector2D GetCenter() const { return Center; }
+
+	/** 读取半径 */
+	UFUNCTION(BlueprintPure, Category = "SCADA|Circle")
+	float GetRadius() const { return Radius; }
+
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Circle")
 	void SetCenter(FVector2D InCenter);
 

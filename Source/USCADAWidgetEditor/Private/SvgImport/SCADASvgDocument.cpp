@@ -271,6 +271,78 @@ namespace SCADASvgImport
 		return Result;
 	}
 
+	/** 从 defs 收集 clipPath（id → 轴对齐裁剪框，viewBox 空间）：rect 子元素贡献自身矩形（rx 圆角忽略），
+	 *  circle/ellipse 贡献外接矩形并警告（近似）；其余形状警告忽略。多形状取**并集包围盒**
+	 *  （不相交形状的并集区间会多包，属可接受近似）。clipPathUnits=objectBoundingBox / clipPath 自带
+	 *  transform 暂不支持（警告）。 */
+	static TMap<FString, FBox2D> CollectClipPaths(const FXmlNode* Root)
+	{
+		TMap<FString, FBox2D> Result;
+		for (const FXmlNode* Node : Root->GetChildrenNodes())
+		{
+			if (!Node->GetTag().Equals(TEXT("defs"), ESearchCase::IgnoreCase))
+			{
+				continue;
+			}
+			for (const FXmlNode* Def : Node->GetChildrenNodes())
+			{
+				if (!Def->GetTag().Equals(TEXT("clipPath"), ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+				const FString Id = Def->GetAttribute(TEXT("id"));
+				if (Id.IsEmpty())
+				{
+					continue;
+				}
+				const FString Units = Def->GetAttribute(TEXT("clipPathUnits"));
+				if (Units.Equals(TEXT("objectBoundingBox"), ESearchCase::IgnoreCase))
+				{
+					UE_LOG(LogSCADASvg, Warning, TEXT("clipPath '%s' 的 clipPathUnits=objectBoundingBox 暂不支持，该裁剪被忽略"), *Id);
+					continue;
+				}
+				if (!Def->GetAttribute(TEXT("transform")).IsEmpty())
+				{
+					UE_LOG(LogSCADASvg, Warning, TEXT("clipPath '%s' 自带 transform 暂不支持，该裁剪被忽略"), *Id);
+					continue;
+				}
+
+				FBox2D Union(ForceInit);
+				for (const FXmlNode* Shape : Def->GetChildrenNodes())
+				{
+					const FString& Tag = Shape->GetTag();
+					if (Tag.Equals(TEXT("rect"), ESearchCase::IgnoreCase))
+					{
+						// 注：ParseLength 定义在本函数之后，此处直接 Atof（空串 = 0，与 ParseLength 缺省一致）
+						const FVector2D P(FCString::Atof(*Shape->GetAttribute(TEXT("x"))), FCString::Atof(*Shape->GetAttribute(TEXT("y"))));
+						const FVector2D S(FCString::Atof(*Shape->GetAttribute(TEXT("width"))), FCString::Atof(*Shape->GetAttribute(TEXT("height"))));
+						Union += P;
+						Union += P + S;
+					}
+					else if (Tag.Equals(TEXT("circle"), ESearchCase::IgnoreCase) || Tag.Equals(TEXT("ellipse"), ESearchCase::IgnoreCase))
+					{
+						const bool bCircle = Tag.Equals(TEXT("circle"), ESearchCase::IgnoreCase);
+						const FVector2D C(FCString::Atof(*Shape->GetAttribute(TEXT("cx"))), FCString::Atof(*Shape->GetAttribute(TEXT("cy"))));
+						const double RX = FCString::Atof(*Shape->GetAttribute(bCircle ? TEXT("r") : TEXT("rx")));
+						const double RY = bCircle ? RX : FCString::Atof(*Shape->GetAttribute(TEXT("ry")));
+						Union += C - FVector2D(RX, RY);
+						Union += C + FVector2D(RX, RY);
+						UE_LOG(LogSCADASvg, Warning, TEXT("clipPath '%s' 内 <%s> 按外接矩形裁剪（近似）"), *Id, *Tag);
+					}
+					else
+					{
+						UE_LOG(LogSCADASvg, Warning, TEXT("clipPath '%s' 内 <%s> 暂不支持，已忽略"), *Id, *Tag);
+					}
+				}
+				if (Union.bIsValid)
+				{
+					Result.Add(Id, Union);
+				}
+			}
+		}
+		return Result;
+	}
+
 	/** 解析样式类属性值 → 颜色或 none 或渐变引用。OutGradient 非空（仅填充传入，描边不要渐变）
 	 *  且引用的是 stops ≥2 的线性渐变时输出渐变定义（Opacity 已烘入 stops 透明度）；
 	 *  径向渐变不输出（回退平均色）。 */
@@ -704,9 +776,13 @@ namespace SCADASvgImport
 
 	/** 递归解析元素节点，产物追加到 OutNodes（一个 XML 元素可产 0..N 个节点——无旋转组扁平化时
 	 *  组本身不产出、子节点直接挂父级）。样式沿组继承；AccumOffset = 父链 translate 与
-	 *  viewBox min 修正的累计平移（顶层调用传 -ViewBoxMin），烘入叶子坐标。 */
+	 *  viewBox min 修正的累计平移（顶层调用传 -ViewBoxMin），烘入叶子坐标。
+	 *  ActiveClip = 祖先链上 clip-path 的累计裁剪框（已烘到与叶子坐标同一空间）；
+	 *  本元素自身 clip-path 的坐标系 = AccumOffset 空间（不含自身 transform）， rect 叶子被钳制、
+	 *  其余叶子越界时警告且不裁剪。 */
 	static void ParseElement(const FXmlNode* XmlNode, const FSCADASvgStyle& ParentStyle,
-		const TMap<FString, FGradientDef>& Gradients, const FVector2D& AccumOffset, const FVector2D& ViewBoxMin,
+		const TMap<FString, FGradientDef>& Gradients, const TMap<FString, FBox2D>& ClipPaths,
+		const FVector2D& AccumOffset, const FVector2D& ViewBoxMin, const TOptional<FBox2D>& ActiveClip,
 		TArray<FSCADASvgNode>& OutNodes)
 	{
 		const FString& Tag = XmlNode->GetTag();
@@ -721,6 +797,32 @@ namespace SCADASvgImport
 		if (XmlNode->GetAttribute(TEXT("display")).Equals(TEXT("none"), ESearchCase::IgnoreCase))
 		{
 			return;
+		}
+
+		// clip-path：本元素用户空间 = AccumOffset 空间（不含自身 transform，与 SVG 语义一致）；
+		// 与祖先裁剪求交。交集为空 = 整棵子树不可见，直接跳过。
+		TOptional<FBox2D> MyClip = ActiveClip;
+		{
+			const FString ClipRef = XmlNode->GetAttribute(TEXT("clip-path"));
+			if (ClipRef.StartsWith(TEXT("url(")))
+			{
+				FString Ref = ClipRef.Mid(4).TrimStartAndEnd();
+				Ref.RemoveFromEnd(TEXT(")"));
+				Ref.RemoveFromStart(TEXT("#"));
+				if (const FBox2D* Clip = ClipPaths.Find(Ref))
+				{
+					const FBox2D Moved(Clip->Min + AccumOffset, Clip->Max + AccumOffset);
+					MyClip = MyClip.IsSet() ? MyClip->Overlap(Moved) : Moved;
+					if (!MyClip->bIsValid || MyClip->GetSize().X <= 0.0 || MyClip->GetSize().Y <= 0.0)
+					{
+						return;
+					}
+				}
+				else
+				{
+					UE_LOG(LogSCADASvg, Warning, TEXT("未找到 clip-path 引用 url(#%s)，按不裁剪处理"), *Ref);
+				}
+			}
 		}
 
 		ESCADASvgNodeKind Kind;
@@ -839,6 +941,19 @@ namespace SCADASvgImport
 				{
 					P += AccumOffset;
 				}
+				if (MyClip.IsSet())
+				{
+					FBox2D B(ForceInit);
+					for (const FVector2D& P : Node.Points)
+					{
+						B += P;
+					}
+					const FBox2D& Clip = MyClip.GetValue();
+					if (B.bIsValid && !(B.Min.X >= Clip.Min.X && B.Min.Y >= Clip.Min.Y && B.Max.X <= Clip.Max.X && B.Max.Y <= Clip.Max.Y))
+					{
+						UE_LOG(LogSCADASvg, Warning, TEXT("Path '%s' 超出 clip-path 裁剪框，path 暂不支持裁剪（按不裁剪导入）"), *Id);
+					}
+				}
 				OutNodes.Add(MoveTemp(Node));
 				++Produced;
 			}
@@ -868,7 +983,7 @@ namespace SCADASvgImport
 				const FVector2D ChildOffset = AccumOffset + T;
 				for (const FXmlNode* Child : XmlNode->GetChildrenNodes())
 				{
-					ParseElement(Child, Style, Gradients, ChildOffset, ViewBoxMin, OutNodes);
+					ParseElement(Child, Style, Gradients, ClipPaths, ChildOffset, ViewBoxMin, MyClip, OutNodes);
 				}
 				return;
 			}
@@ -884,9 +999,14 @@ namespace SCADASvgImport
 			Node.bHasRotation = true;
 			Node.RotationAngle = RotationAngle;
 			Node.RotationCenter = RotationCenter;
+			if (MyClip.IsSet())
+			{
+				// 旋转组子元素保持原始 SVG 坐标（容器本地空间），与已烘平的裁剪框不同空间，无法钳制
+				UE_LOG(LogSCADASvg, Warning, TEXT("旋转组 '%s' 内的 clip-path 暂不支持，已忽略裁剪"), *Id);
+			}
 			for (const FXmlNode* Child : XmlNode->GetChildrenNodes())
 			{
-				ParseElement(Child, Style, Gradients, FVector2D::ZeroVector, ViewBoxMin, Node.Children);
+				ParseElement(Child, Style, Gradients, ClipPaths, FVector2D::ZeroVector, ViewBoxMin, TOptional<FBox2D>(), Node.Children);
 			}
 			// 空分组无意义
 			if (Node.Children.Num() > 0)
@@ -937,6 +1057,57 @@ namespace SCADASvgImport
 		for (FVector2D& P : Node.Points)
 		{
 			P += AccumOffset;
+		}
+
+		// clip-path 裁剪：rect 叶子直接钳制到裁剪框（被钳边的圆角丢失，属可接受近似；
+		// 完全裁掉的元素跳过——液位管里"溢出的液体"即由此消失）；其余叶子越界仅警告不裁剪
+		if (MyClip.IsSet())
+		{
+			const FBox2D& Clip = MyClip.GetValue();
+			if (Kind == ESCADASvgNodeKind::Rect)
+			{
+				const FVector2D Max = Node.P1 + Node.P2;
+				const FVector2D CMin(FMath::Max(Node.P1.X, Clip.Min.X), FMath::Max(Node.P1.Y, Clip.Min.Y));
+				const FVector2D CMax(FMath::Min(Max.X, Clip.Max.X), FMath::Min(Max.Y, Clip.Max.Y));
+				if (CMax.X - CMin.X <= 0.0 || CMax.Y - CMin.Y <= 0.0)
+				{
+					return; // 被裁剪框完全裁掉
+				}
+				Node.P1 = CMin;
+				Node.P2 = CMax - CMin;
+			}
+			else
+			{
+				FBox2D B(ForceInit);
+				switch (Kind)
+				{
+				case ESCADASvgNodeKind::Circle:
+					B += Node.P1 - FVector2D(Node.Radius, Node.Radius);
+					B += Node.P1 + FVector2D(Node.Radius, Node.Radius);
+					break;
+				case ESCADASvgNodeKind::Ellipse:
+					B += Node.P1 - Node.P2;
+					B += Node.P1 + Node.P2;
+					break;
+				case ESCADASvgNodeKind::Line:
+					B += Node.P1;
+					B += Node.P2;
+					break;
+				case ESCADASvgNodeKind::Polyline:
+				case ESCADASvgNodeKind::Polygon:
+					for (const FVector2D& P : Node.Points)
+					{
+						B += P;
+					}
+					break;
+				default:
+					break;
+				}
+				if (B.bIsValid && !(B.Min.X >= Clip.Min.X && B.Min.Y >= Clip.Min.Y && B.Max.X <= Clip.Max.X && B.Max.Y <= Clip.Max.Y))
+				{
+					UE_LOG(LogSCADASvg, Warning, TEXT("元素 '%s' 超出 clip-path 裁剪框，非 rect 元素暂不支持裁剪（按不裁剪导入）"), *Id);
+				}
+			}
 		}
 		OutNodes.Add(MoveTemp(Node));
 	}
@@ -989,6 +1160,7 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 	}
 
 	const TMap<FString, SCADASvgImport::FGradientDef> Gradients = SCADASvgImport::CollectGradients(Root);
+	const TMap<FString, FBox2D> ClipPaths = SCADASvgImport::CollectClipPaths(Root);
 
 	// SVG 规范缺省样式：fill = 纯黑，stroke = none
 	FSCADASvgStyle RootStyle;
@@ -996,7 +1168,7 @@ bool FSCADASvgDocument::Parse(const FString& SvgText, FSCADASvgDocument& OutDocu
 
 	for (const FXmlNode* Child : Root->GetChildrenNodes())
 	{
-		SCADASvgImport::ParseElement(Child, RootStyle, Gradients, -ViewBoxMin, ViewBoxMin, OutDocument.Roots);
+		SCADASvgImport::ParseElement(Child, RootStyle, Gradients, ClipPaths, -ViewBoxMin, ViewBoxMin, TOptional<FBox2D>(), OutDocument.Roots);
 	}
 
 	// 组容器坐标空间 = 原始 viewBox（CropToContent 只改顶层 ViewBoxSize，不动本值）

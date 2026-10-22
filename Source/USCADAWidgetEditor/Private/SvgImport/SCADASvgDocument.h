@@ -12,6 +12,8 @@
  * 样式 fill / stroke / stroke-width / opacity / fill-opacity / stroke-opacity（沿组继承），
  * defs 内 linearGradient 完整解析为线性渐变（stops + 渐变轴 + gradientUnits + href 继承，
  * 逐顶点色精确绘制），radialGradient 回退为加权平均纯色（真径向渐变排 P2）。
+ * clip-path 支持 rect 组合（轴对齐裁剪框：rect 叶子钳制、完全裁掉的跳过，其余形状越界仅警告）；
+ * mask 不支持。
  * 坐标一律为 viewBox 空间（左上角原点、Y 向下，与 SCADA 画布设计坐标同构）。
  */
 

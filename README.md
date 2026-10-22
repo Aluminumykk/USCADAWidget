@@ -114,7 +114,8 @@ Unreal Engine 5.7 的类 WinCC SCADA 界面配置插件：基于 UMG + Slate 的
 - 变换：组 `translate` 直接烘入坐标（无旋转组在导入时扁平化，不产生多余嵌套画布）；组 `rotate(a,cx,cy)` 保留为命名子画布（平移落到槽位置，旋转走 RenderTransform）；`scale` / `matrix` / `skew` 暂不支持（警告忽略）
 - 颜色：`#RGB` / `#RRGGBB` / `rgb()` / 常用命名色；`linearGradient` **完整导入为真线性渐变**（stops + 渐变轴 + `gradientUnits`，`href` 继承；填充图元的 `FillGradient` 属性，绘制 = 填充三角扇逐顶点算色，线性插值数学精确），`radialGradient` 回退为加权平均纯色（真径向渐变规划中）；`gradientTransform` 暂不支持（警告忽略）
 - 未知命名空间的元素与属性（`inkscape:` / `sodipodi:` 等厂商扩展）按 SVG 规范静默忽略
-- 暂不支持：`<text>`、内联 `style` 属性、`<use>`/`<symbol>`、裁剪/蒙版（clipPath/mask）——不支持的项会跳过并在输出日志（LogSCADASvg）给出警告
+- `clipPath`：支持 rect 组合（轴对齐裁剪框——rect 叶子直接钳制、完全裁掉的元素不导入；圆/椭圆按外接矩形近似；其余形状越界仅警告不裁剪）；`mask` 与 `clipPathUnits=objectBoundingBox` 暂不支持
+- 暂不支持：`<text>`、内联 `style` 属性、`<use>`/`<symbol>`——不支持的项会跳过并在输出日志（LogSCADASvg）给出警告
 
 **按内容裁剪 viewBox**（Project Settings → SCADA SVG Import，默认开启）：很多元件素材的 viewBox 比图形本身大一圈（四周留白），开启后导入时自动按内容包围盒裁剪——根画布紧贴图形；`CropPadding` 可加回少量边距。带 `rotate` 的分组不受影响（其容器坐标空间与 Pivot 锚定原始 viewBox）。
 

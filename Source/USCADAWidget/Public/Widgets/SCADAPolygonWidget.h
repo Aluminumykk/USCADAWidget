@@ -111,10 +111,6 @@ public:
 	UPROPERTY()
 	FGetSCADABool bFlashInvertedDelegate;
 
-	/** 读取顶点列（蓝图"读-改-写"驱动用；纯读取不绕过封装，写请走 SetPoints） */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Polygon")
-	const TArray<FVector2D>& GetPoints() const { return Points; }
-
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Polygon")
 	void SetPoints(const TArray<FVector2D>& InPoints);
 

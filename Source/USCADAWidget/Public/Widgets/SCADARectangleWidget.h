@@ -131,22 +131,6 @@ public:
 	UPROPERTY()
 	FGetSCADABool bFlashInvertedDelegate;
 
-	/** 读取左上角位置（蓝图"读-改-写"驱动用；纯读取不绕过封装，写请走 Set* 以维持取整/槽同步） */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Rectangle")
-	FVector2D GetPosition() const { return Position; }
-
-	/** 读取宽/高 */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Rectangle")
-	FVector2D GetSize() const { return Size; }
-
-	/** 读取圆角宽度 */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Rectangle")
-	float GetCornerRadiusX() const { return CornerRadiusX; }
-
-	/** 读取圆角高度 */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Rectangle")
-	float GetCornerRadiusY() const { return CornerRadiusY; }
-
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Rectangle")
 	void SetPosition(FVector2D InPosition);
 

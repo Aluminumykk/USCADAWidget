@@ -32,14 +32,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SCADA|RegularPolygon", meta = (Delta = "1.0", LinearDeltaSensitivity = "1"))
 	float StartAngle = -90.0f;
 
-	/** 读取边数（纯读取不绕过封装，写请走 Set*） */
-	UFUNCTION(BlueprintPure, Category = "SCADA|RegularPolygon")
-	int32 GetSides() const { return Sides; }
-
-	/** 读取起始角 */
-	UFUNCTION(BlueprintPure, Category = "SCADA|RegularPolygon")
-	float GetStartAngle() const { return StartAngle; }
-
 	UFUNCTION(BlueprintCallable, Category = "SCADA|RegularPolygon")
 	void SetSides(int32 InSides);
 

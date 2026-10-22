@@ -121,18 +121,6 @@ public:
 	UPROPERTY()
 	FGetSCADABool bFlashInvertedDelegate;
 
-	/** 读取圆心（蓝图"读-改-写"驱动用；纯读取不绕过封装，写请走 Set* 以维持取整/槽同步） */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Ellipse")
-	FVector2D GetCenter() const { return Center; }
-
-	/** 读取 X 轴半径 */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Ellipse")
-	float GetRadiusX() const { return RadiusX; }
-
-	/** 读取 Y 轴半径 */
-	UFUNCTION(BlueprintPure, Category = "SCADA|Ellipse")
-	float GetRadiusY() const { return RadiusY; }
-
 	UFUNCTION(BlueprintCallable, Category = "SCADA|Ellipse")
 	void SetCenter(FVector2D InCenter);
 

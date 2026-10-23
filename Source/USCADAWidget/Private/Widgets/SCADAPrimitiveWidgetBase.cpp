@@ -128,6 +128,16 @@ void USCADAPrimitiveWidgetBase::ForceSyncFromSlotRect()
 	}
 }
 
+void USCADAPrimitiveWidgetBase::TranslateGeometryAndSync(const FVector2D& Delta)
+{
+	// 正向通道：SyncSlotFromGeometry 内部已完成写槽 + 刷新槽缓存（CachedSlotPos/Size、
+	// bSlotCacheValid）+ PushGeometryToSlate + 交互簿记复位，此处不可重复调用。
+	// 下一拍 CheckSlotSync 读到"槽 == 缓存 == 数据包围盒"，不会把这平移误判成
+	// 设计器输入去做映射（裸写 slot->SetPosition 则会被当成外部拖动输入）。
+	TranslateGeometryBy(Delta);
+	SyncSlotFromGeometry();
+}
+
 void USCADAPrimitiveWidgetBase::CheckSlotSync()
 {
 	if (bSyncingGeometry)

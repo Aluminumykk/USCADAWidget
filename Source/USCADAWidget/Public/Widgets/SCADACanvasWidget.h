@@ -81,6 +81,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SCADA|Canvas")
 	FVector2D GetEffectiveCanvasScale() const;
 
+	/** 适配内容大小：把 CanvasSize 收缩到直接子控件内容并集包围盒的尺寸（四周接壤、无留白），
+	 *  并把全部子控件整体平移使内容包围盒左上角落到 (0,0)。无子控件时什么都不做。
+	 *  图元子控件经 TranslateGeometryAndSync 正向通道平移（几何+槽+缓存一起动），
+	 *  普通控件（Text、嵌套画布等）直接写槽位置（无槽同步状态机，安全）。
+	 *  限定"根画布"场景：嵌套画布拟合后内容会归到该画布自己的左上角，
+	 *  但它在外层画布里的槽矩形不会自动补偿，外层布局需自行调整。
+	 *  非反射方法：由编辑器设计器扩展 FSCADACanvasFitExtension 的"适配内容"按钮调用。 */
+	void FitCanvasToContent();
+
 protected:
 	//~ UPanelWidget
 	virtual UClass* GetSlotClass() const override;

@@ -29,6 +29,13 @@ public:
 	/** 槽矩形被外部修改（设计器拖动/编辑槽属性）后由槽调用：以槽为准回写几何数据并标脏资产 */
 	void ForceSyncFromSlotRect();
 
+	/** 供画布"适配内容"等批量操作用：读取几何数据包围盒（protected GetGeometryBounds 钩子的公开转发） */
+	void GetGeometryBoundsPublic(FVector2D& OutMin, FVector2D& OutMax) const { GetGeometryBounds(OutMin, OutMax); }
+
+	/** 几何数据整体平移 Delta 并经正向通道同步槽/Slate（刷新槽缓存，
+	 *  CheckSlotSync 不会把它误判为设计器拖动输入） */
+	void TranslateGeometryAndSync(const FVector2D& Delta);
+
 	virtual void BeginDestroy() override;
 
 protected:

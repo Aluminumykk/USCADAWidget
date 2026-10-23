@@ -93,6 +93,19 @@ public:
 	 *  非反射方法：由编辑器设计器扩展 FSCADACanvasFitExtension 的"适配内容"按钮调用。 */
 	void FitCanvasToContent();
 
+	/** 内容适配画布（"适配内容"的反向操作）：CanvasSize 保持不变，把画布内全部直接子控件
+	 *  整体缩放+平移，使内容（视觉）包围盒**等比完整显示**在画布内并居中——
+	 *  k = min(CanvasSize.X/内容宽, CanvasSize.Y/内容高)，留边 = (CanvasSize - k*内容尺寸)/2。
+	 *  无子控件、或内容两轴均退化（宽和高都 <1）时什么都不做；单轴退化（纯水平/垂直线）
+	 *  时该轴不参与 k 计算、内容退化轴居中。
+	 *  图元经 ScaleGeometryAndSync 缩放（几何数据 + 线宽/圆角等厚度类一起乘 k，视觉是原内容
+	 *  的等比放大版）；普通控件槽位置/尺寸缩放；带 RenderTransform 的子控件其
+	 *  Translation（父坐标系量）同步乘 k，Angle/Scale/Pivot 不动；嵌套画布 ScaleMode=None 时
+	 *  Zoom×=k（≠None 时内容随槽自适应无需处理）；Text 控件字号 Font.Size 同步缩放（取整 ≥1）。
+	 *  同样限定根画布场景（嵌套画布外层槽位不补偿）。非反射方法：由 FSCADACanvasFitExtension
+	 *  的"内容适配画布"按钮调用。 */
+	void FitContentToCanvas();
+
 protected:
 	//~ UPanelWidget
 	virtual UClass* GetSlotClass() const override;
@@ -112,4 +125,9 @@ private:
 	/** 基类 MyCanvas（TSharedPtr<SConstraintCanvas>）由 RebuildWidget 创建为 SSCADACanvas，
 	 *  取类型化指针（网格/Zoom 接口） */
 	TSharedPtr<SSCADACanvas> GetSCADACanvas() const;
+
+	/** "适配内容/内容适配画布"共用的内容（视觉）包围盒汇总：图元取几何数据包围盒、
+	 *  普通控件取槽矩形，再按各自 RenderTransform 折算为视觉 AABB（恒等快路径）。
+	 *  返回 false = 无子控件或全部槽不可得，调用方应直接什么都不做 */
+	bool ComputeVisualContentBounds(FVector2D& OutMin, FVector2D& OutMax) const;
 };

@@ -92,6 +92,17 @@ void USCADACircleWidget::TranslateGeometryBy(const FVector2D& Delta)
 	Center += Delta;
 }
 
+void USCADACircleWidget::ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness)
+{
+	Center = Center * Scale + PostOffset;
+	Radius *= Scale;
+	if (bScaleThickness)
+	{
+		Thickness *= Scale;
+	}
+	// 正多边形子类继承本实现即正确：数据模型同为 Center+Radius，Sides/StartAngle 不受缩放影响
+}
+
 void USCADACircleWidget::ResetInteractionState()
 {
 	bDragStartValid = false;

@@ -172,6 +172,10 @@ protected:
 	/** 几何数据整体平移（初始放置认领用） */
 	virtual void TranslateGeometryBy(const FVector2D& Delta) override;
 
+	/** 逐点缩放平移 p*k+off（bSnapToPixel=false 时保持亚像素语义，取整由调用方 Snap 收尾）；
+	 *  bScaleThickness 时边框 Thickness 一并乘 k */
+	virtual void ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness) override;
+
 	/** 把 Points 各项转成槽内局部坐标（画布坐标 - 槽位置）同步给 Slate 层 */
 	virtual void PushGeometryToSlate() override;
 

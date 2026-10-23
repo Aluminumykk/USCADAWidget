@@ -91,6 +91,17 @@ void USCADALineWidget::TranslateGeometryBy(const FVector2D& Delta)
 	EndPoint += Delta;
 }
 
+void USCADALineWidget::ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness)
+{
+	StartPoint = StartPoint * Scale + PostOffset;
+	EndPoint = EndPoint * Scale + PostOffset;
+	// 箭头尺寸 = max(Slate 默认值, 线宽×4)（SSCADALine），UMG 层无独立箭头属性——缩放线宽即覆盖箭头
+	if (bScaleThickness)
+	{
+		Thickness *= Scale;
+	}
+}
+
 void USCADALineWidget::ResetInteractionState()
 {
 	bDegenerateDrag = false;

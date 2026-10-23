@@ -134,7 +134,19 @@ void USCADAPrimitiveWidgetBase::TranslateGeometryAndSync(const FVector2D& Delta)
 	// bSlotCacheValid）+ PushGeometryToSlate + 交互簿记复位，此处不可重复调用。
 	// 下一拍 CheckSlotSync 读到"槽 == 缓存 == 数据包围盒"，不会把这平移误判成
 	// 设计器输入去做映射（裸写 slot->SetPosition 则会被当成外部拖动输入）。
+	// 平移不产生小数（数据与 Delta 均为既有值），无需额外取整。
 	TranslateGeometryBy(Delta);
+	SyncSlotFromGeometry();
+}
+
+void USCADAPrimitiveWidgetBase::ScaleGeometryAndSync(float Scale, const FVector2D& PostOffset)
+{
+	// Set* 接口同款程序段：写数据 → 像素对齐 → 正向同步（SyncSlotFromGeometry 内含
+	// 写槽/刷新槽缓存/PushGeometryToSlate/交互簿记复位，不可重复调用）。
+	// 缩放产生小数坐标，取整交由各子类 SnapPropertiesToPixel 的既有规则收尾——
+	// bSnapToPixel=false（SVG path 采样导入）的折线/多边形点位保留亚像素，只对齐线宽。
+	ScaleGeometryBy(Scale, PostOffset, true);
+	SnapPropertiesToPixel();
 	SyncSlotFromGeometry();
 }
 

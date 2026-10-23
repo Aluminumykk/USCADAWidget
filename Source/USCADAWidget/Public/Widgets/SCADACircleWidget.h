@@ -177,6 +177,11 @@ protected:
 	/** 几何数据整体平移（初始放置认领用） */
 	virtual void TranslateGeometryBy(const FVector2D& Delta) override;
 
+	/** Center*k+off、Radius*k；bScaleThickness 时边框 Thickness 一并乘 k。
+	 *  正多边形（子类）继承本实现即正确：其数据模型同为 Center+Radius，Sides/StartAngle
+	 *  是形状参数不受缩放影响，无需覆盖 */
+	virtual void ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness) override;
+
 	/** 把半径/圆心同步给 Slate 层：LocalCenter = 圆心 − 槽位置，由 SetLocalCenter 显式给出，
 	 *  圆的显示位置与槽形状无关；仅在交互收尾才把槽对齐回外接正方形（见基类 CheckSlotSync 收尾分支）。 */
 	virtual void PushGeometryToSlate() override;

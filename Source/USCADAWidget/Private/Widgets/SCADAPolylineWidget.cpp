@@ -123,6 +123,21 @@ void USCADAPolylineWidget::TranslateGeometryBy(const FVector2D& Delta)
 	++PointsVersion;
 }
 
+void USCADAPolylineWidget::ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness)
+{
+	for (FVector2D& P : Points)
+	{
+		P = P * Scale + PostOffset;
+	}
+	if (bScaleThickness)
+	{
+		Thickness *= Scale;
+	}
+	// 同 TranslateGeometryBy：Points 被写入即递增版本号（调用方随后 SnapPropertiesToPixel
+	// 再递增无害；bSnapToPixel=false 的亚像素语义保留到那次调用才收尾）
+	++PointsVersion;
+}
+
 bool USCADAPolylineWidget::ShouldVerifyGeometryBounds() const
 {
 	return PointsVersion != BoundsVerifiedPointsVersion;

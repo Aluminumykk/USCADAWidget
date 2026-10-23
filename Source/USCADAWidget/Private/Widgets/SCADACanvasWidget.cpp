@@ -6,6 +6,7 @@
 #include "Widgets/SCADACanvasSlot.h"
 #include "Widgets/SCADAPrimitiveWidgetBase.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/TextBlock.h"
 #include "Slate/WidgetTransform.h"
 #include "Rendering/SlateRenderTransform.h"
 #include "Math/TransformCalculus2D.h"
@@ -134,17 +135,17 @@ FVector2D USCADACanvasWidget::GetEffectiveCanvasScale() const
 	return FVector2D(FMath::Max(Zoom, 0.01f));
 }
 
-void USCADACanvasWidget::FitCanvasToContent()
+bool USCADACanvasWidget::ComputeVisualContentBounds(FVector2D& OutMin, FVector2D& OutMax) const
 {
-	// 无子控件 → 什么都不做（空画布保持原尺寸，不误触把画布缩成 1×1）
+	// 无子控件 → false（"适配内容/内容适配画布"两个操作都直接什么都不做）
 	if (Slots.Num() == 0)
 	{
-		return;
+		return false;
 	}
 
-	// 1) 汇总内容并集包围盒：图元取几何数据包围盒（数据层是唯一真值，槽矩形恒等于它）；
-	//    普通控件（Text、嵌套画布等非图元基类子类）取其槽位置 + 尺寸。
-	//    初始值取首个有效子内容（5.7 的 TVector2 无 Max()/Lowest() 哨兵静态函数，不能用极值初始化）
+	// 汇总内容并集包围盒：图元取几何数据包围盒（数据层是唯一真值，槽矩形恒等于它）；
+	// 普通控件（Text、嵌套画布等非图元基类子类）取其槽位置 + 尺寸。
+	// 初始值取首个有效子内容（5.7 的 TVector2 无 Max()/Lowest() 哨兵静态函数，不能用极值初始化）
 	FVector2D BoundsMin = FVector2D::ZeroVector;
 	FVector2D BoundsMax = FVector2D::ZeroVector;
 	bool bHasContent = false;
@@ -203,18 +204,26 @@ void USCADACanvasWidget::FitCanvasToContent()
 		}
 	}
 
-	// 全部子槽都取不到（理论兜底）：同样什么都不做
-	if (!bHasContent)
+	OutMin = BoundsMin;
+	OutMax = BoundsMax;
+	// 全部子槽都取不到（理论兜底）同样返回 false：两个适配操作都不动画布/内容
+	return bHasContent;
+}
+
+void USCADACanvasWidget::FitCanvasToContent()
+{
+	FVector2D BoundsMin, BoundsMax;
+	if (!ComputeVisualContentBounds(BoundsMin, BoundsMax))
 	{
 		return;
 	}
 
-	// 2) 内容尺寸 = 包围盒尺寸，逐轴 Clamp ≥1（点/单点线等退化图元包围盒可能为零）
+	// 1) 内容尺寸 = 包围盒尺寸，逐轴 Clamp ≥1（点/单点线等退化图元包围盒可能为零）
 	FVector2D ContentSize = BoundsMax - BoundsMin;
 	ContentSize.X = FMath::Max(ContentSize.X, 1.0);
 	ContentSize.Y = FMath::Max(ContentSize.Y, 1.0);
 
-	// 3) 整体平移使内容包围盒左上角落到 (0,0)
+	// 2) 整体平移使内容包围盒左上角落到 (0,0)
 	const FVector2D Delta = -BoundsMin;
 	if (!Delta.IsNearlyZero())
 	{
@@ -234,14 +243,109 @@ void USCADACanvasWidget::FitCanvasToContent()
 			}
 			else if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Child->Slot))
 			{
-				// 普通控件没有槽同步状态机，直接写槽安全
+				// 普通控件没有槽同步状态机，直接写槽安全；RenderTransform.Translation 是
+				// 相对控件自身的内容，平移不改变它（视觉自然跟随）
 				CanvasSlot->SetPosition(CanvasSlot->GetPosition() + Delta);
 			}
 		}
 	}
 
-	// 4) 画布收缩到内容尺寸（四周接壤、无留白）
+	// 3) 画布收缩到内容尺寸（四周接壤、无留白）
 	SetCanvasSize(ContentSize);
+}
+
+void USCADACanvasWidget::FitContentToCanvas()
+{
+	FVector2D BoundsMin, BoundsMax;
+	if (!ComputeVisualContentBounds(BoundsMin, BoundsMax))
+	{
+		return;
+	}
+
+	// 等比完整显示（类比 ScaleMode=Fit）：k = min(画布宽/内容宽, 画布高/内容高)，
+	// 内容缩放 k 倍后居中留边。CanvasSize 保持不变。
+	// 退化轴处理：内容宽或高 <1（纯水平/垂直线、点集）不参与 k 计算，k 取另一轴；
+	// 该轴内容（退化为一条线/一个点）随公式被居中到画布中线。两轴都退化 = 没有
+	// 可缩放的面积，不缩放不平移直接返回（避免除零/缩放爆炸）。
+	const FVector2D ContentSize = BoundsMax - BoundsMin;
+	const bool bValidX = ContentSize.X >= 1.0;
+	const bool bValidY = ContentSize.Y >= 1.0;
+	if (!bValidX && !bValidY)
+	{
+		return;
+	}
+
+	double Scale;
+	if (bValidX && bValidY)
+	{
+		Scale = FMath::Min(CanvasSize.X / ContentSize.X, CanvasSize.Y / ContentSize.Y);
+	}
+	else if (bValidX)
+	{
+		Scale = CanvasSize.X / ContentSize.X;
+	}
+	else
+	{
+		Scale = CanvasSize.Y / ContentSize.Y;
+	}
+
+	// 居中：留边 = (CanvasSize - k*内容尺寸)/2；PostOffset 一次到位（先缩放后平移的合成），
+	// 避免"先缩放到原点再平移"的两步取整误差。退化轴 ContentSize=0 时该式恰好把
+	// 退化内容映射到画布该轴中心，语义正确无需特判。
+	const FVector2D PostOffset = (CanvasSize - ContentSize * Scale) * 0.5 - BoundsMin * Scale;
+
+	for (UPanelSlot* PanelSlot : Slots)
+	{
+		UWidget* Child = (PanelSlot != nullptr && PanelSlot->Content != nullptr) ? PanelSlot->Content : nullptr;
+		if (Child == nullptr)
+		{
+			continue;
+		}
+
+		if (USCADAPrimitiveWidgetBase* Primitive = Cast<USCADAPrimitiveWidgetBase>(Child))
+		{
+			// 图元走正向通道：几何数据（含线宽/圆角等厚度类）p→p*k+PostOffset → 取整 → 对齐槽。
+			// bSnapToPixel=false 的 SVG 采样点保持亚像素（其 Snap 只对齐线宽，语义不破坏）
+			Primitive->ScaleGeometryAndSync((float)Scale, PostOffset);
+		}
+		else if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Child->Slot))
+		{
+			// 普通控件槽矩形随内容整体缩放平移（无槽同步状态机，直接写槽安全）
+			CanvasSlot->SetPosition(CanvasSlot->GetPosition() * Scale + PostOffset);
+			CanvasSlot->SetSize(CanvasSlot->GetSize() * Scale);
+		}
+
+		// 带 RenderTransform 的子控件（含 SVG rotate 分组画布）：Translation 是父坐标系量，
+		// 内容整体缩放后必须同步乘 k，否则视觉与包围盒不一致；Angle/Scale/Shear 是
+		// 控件自身相对属性不动，Pivot 相对控件尺寸（槽尺寸已缩放）也不动
+		FWidgetTransform ChildRenderTransform = Child->GetRenderTransform();
+		if (!ChildRenderTransform.Translation.IsNearlyZero())
+		{
+			ChildRenderTransform.Translation = ChildRenderTransform.Translation * Scale;
+			Child->SetRenderTransform(ChildRenderTransform);
+		}
+
+		// "内容按控件内在属性绘制、不随槽尺寸自动缩放"的两类补偿：
+		if (USCADACanvasWidget* Nested = Cast<USCADACanvasWidget>(Child))
+		{
+			// 嵌套画布 ScaleMode=None：内容按其自身 Zoom 渲染，槽尺寸变化不影响内容缩放——
+			// 把 k 乘进 Zoom。ScaleMode≠None 时生效缩放由槽尺寸自动计算，内容随槽 Resize 自然跟随
+			if (Nested->ScaleMode == ESCADACanvasScaleMode::None)
+			{
+				Nested->SetZoom(FMath::Max(Nested->Zoom * (float)Scale, 0.01f));
+			}
+		}
+		else if (UTextBlock* TextBlock = Cast<UTextBlock>(Child))
+		{
+			// 文字字号是内在属性、不随槽尺寸缩放——同步乘 k（四舍五入取整、下限 1），
+			// 走 GetFont/SetFont 读写并立即推送 Slate；文本内其它字号字段（OutlineSize 等）保持不动
+			FSlateFontInfo Font = TextBlock->GetFont();
+			Font.Size = FMath::Max(FMath::RoundToInt(Font.Size * (float)Scale), 1);
+			TextBlock->SetFont(Font);
+		}
+	}
+
+	// CanvasSize 保持不变——本操作只缩放/平移内容
 }
 
 UClass* USCADACanvasWidget::GetSlotClass() const

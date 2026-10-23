@@ -160,6 +160,10 @@ protected:
 	/** 几何数据整体平移（初始放置认领用） */
 	virtual void TranslateGeometryBy(const FVector2D& Delta) override;
 
+	/** 端点缩放平移 p*k+off；bScaleThickness 时 Thickness 一并乘 k
+	 *  （箭头尺寸 = max(Slate 默认, 线宽×4) 在 Slate 层由线宽推导，缩放线宽即覆盖） */
+	virtual void ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness) override;
+
 	/** 把起点/终点转成槽内局部坐标（画布坐标 - 槽位置）同步给 Slate 层 */
 	virtual void PushGeometryToSlate() override;
 

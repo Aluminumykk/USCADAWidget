@@ -123,6 +123,20 @@ void USCADAPolygonWidget::TranslateGeometryBy(const FVector2D& Delta)
 	++PointsVersion;
 }
 
+void USCADAPolygonWidget::ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness)
+{
+	for (FVector2D& P : Points)
+	{
+		P = P * Scale + PostOffset;
+	}
+	if (bScaleThickness)
+	{
+		Thickness *= Scale;
+	}
+	// 同 TranslateGeometryBy：Points 被写入即递增版本号
+	++PointsVersion;
+}
+
 bool USCADAPolygonWidget::ShouldVerifyGeometryBounds() const
 {
 	return PointsVersion != BoundsVerifiedPointsVersion;

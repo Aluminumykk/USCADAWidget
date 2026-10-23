@@ -10,6 +10,7 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "USCADAWidgetEditor"
@@ -33,28 +34,45 @@ void FSCADACanvasFitExtension::ExtendSelection(const TArray<FWidgetReference>& S
 {
 	SelectionCache = Selection;
 
-	// 半透明深色底（与顶点手柄同样用 WhiteBrush 纯色着色）垫底，保证按钮不被画布内容挡住
-	const TSharedRef<SWidget> FitButton =
+	// 半透明深色底（与顶点手柄同样用 WhiteBrush 纯色着色）垫底，保证按钮不被画布内容挡住；
+	// 竖排两个操作按钮：画布适配内容（收缩画布）/ 内容适配画布（等比缩放内容）
+	const TSharedRef<SWidget> FitButtons =
 		SNew(SBorder)
 		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 		.BorderBackgroundColor(FLinearColor(0.05f, 0.05f, 0.05f, 0.6f))
 		.Padding(3.0f)
 		[
-			SNew(SButton)
-			.ContentPadding(FMargin(8.0f, 3.0f))
-			.HAlign(HAlign_Center)
-			.Text(LOCTEXT("FitCanvasToContentButton", "适配内容"))
-			.ToolTipText(LOCTEXT("FitCanvasToContentTooltip", "把画布尺寸收缩到内容包围盒，子控件整体平移到四周接壤"))
-			.OnClicked(this, &FSCADACanvasFitExtension::OnFitClicked)
+			SNew(SVerticalBox)
+			+SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(SButton)
+				.ContentPadding(FMargin(8.0f, 3.0f))
+				.HAlign(HAlign_Center)
+				.Text(LOCTEXT("FitCanvasToContentButton", "画布适配内容"))
+				.ToolTipText(LOCTEXT("FitCanvasToContentTooltip", "把画布尺寸收缩到内容包围盒，子控件整体平移到四周接壤"))
+				.OnClicked(this, &FSCADACanvasFitExtension::OnFitCanvasToContentClicked)
+			]
+			+SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0.0f, 2.0f, 0.0f, 0.0f)
+			[
+				SNew(SButton)
+				.ContentPadding(FMargin(8.0f, 3.0f))
+				.HAlign(HAlign_Center)
+				.Text(LOCTEXT("FitContentToCanvasButton", "内容适配画布"))
+				.ToolTipText(LOCTEXT("FitContentToCanvasTooltip", "画布尺寸不变，把内容等比缩放并居中到画布内完整显示（线宽/圆角/字号等随比例缩放）"))
+				.OnClicked(this, &FSCADACanvasFitExtension::OnFitContentToCanvasClicked)
+			]
 		];
 
-	FitButton->SlatePrepass();
+	FitButtons->SlatePrepass();
 
 	// Offset 每帧重算：按钮恒浮在画布可视左上角内侧，跟随画布移动/缩放（与顶点手柄同一机制）
 	TAttribute<FVector2D> Offset = TAttribute<FVector2D>::Create(
 		TAttribute<FVector2D>::FGetter::CreateSP(SharedThis(this), &FSCADACanvasFitExtension::GetButtonOffset));
 	SurfaceElements.Add(MakeShared<FDesignerSurfaceElement>(
-		FitButton, EExtensionLayoutLocation::RelativeFromParent, Offset, FVector2D(0, 0)));
+		FitButtons, EExtensionLayoutLocation::RelativeFromParent, Offset, FVector2D(0, 0)));
 }
 
 UWidget* FSCADACanvasFitExtension::GetTemplateWidget() const
@@ -112,24 +130,24 @@ void FSCADACanvasFitExtension::ModifyInstanceForUndo(UWidget* CanvasWidget)
 	}
 }
 
-FReply FSCADACanvasFitExtension::OnFitClicked()
+bool FSCADACanvasFitExtension::ApplyToBothInstances(TFunctionRef<void(USCADACanvasWidget*)> Operation, const FText& SessionName)
 {
 	USCADACanvasWidget* Template = Cast<USCADACanvasWidget>(GetTemplateWidget());
 	if (Template == nullptr)
 	{
-		return FReply::Unhandled();
+		return false;
 	}
 
-	BeginTransaction(LOCTEXT("FitCanvasToContentTransaction", "适配画布内容"));
+	BeginTransaction(SessionName);
 
 	// 双实例陷阱：Template（Outer=WidgetTree，持久化真值）与 Preview（Outer=WidgetTree_0，
-	// 负责显示）是两棵不同的对象树，两棵各适配一次；只写一份编译/保存后回退。
-	// 各自的操作对象是自己的 Slots/子控件，数据两棵一致 → 两棵算出的平移量相同。
+	// 负责显示）是两棵不同的对象树，两棵各执行一次；只写一份编译/保存后回退。
+	// 各自的操作对象是自己的 Slots/子控件，数据两棵一致 → 两棵算出的缩放/平移量相同。
 	ModifyInstanceForUndo(Template);
-	Template->FitCanvasToContent();
+	Operation(Template);
 	if (USCADACanvasWidget* Preview = Cast<USCADACanvasWidget>(GetPreviewWidget()))
 	{
-		Preview->FitCanvasToContent();
+		Operation(Preview);
 	}
 
 	EndTransaction();
@@ -139,7 +157,29 @@ FReply FSCADACanvasFitExtension::OnFitClicked()
 		Designer->MarkDesignModifed(false);
 	}
 
-	// 画布尺寸与内容位置变化本身就是可见反馈，不做额外提示
+	// 画布尺寸/内容位置/内容缩放变化本身就是可见反馈，不做额外提示
+	return true;
+}
+
+FReply FSCADACanvasFitExtension::OnFitCanvasToContentClicked()
+{
+	if (!ApplyToBothInstances(
+		[](USCADACanvasWidget* Canvas) { Canvas->FitCanvasToContent(); },
+		LOCTEXT("FitCanvasToContentTransaction", "画布适配内容")))
+	{
+		return FReply::Unhandled();
+	}
+	return FReply::Handled();
+}
+
+FReply FSCADACanvasFitExtension::OnFitContentToCanvasClicked()
+{
+	if (!ApplyToBothInstances(
+		[](USCADACanvasWidget* Canvas) { Canvas->FitContentToCanvas(); },
+		LOCTEXT("FitContentToCanvasTransaction", "内容适配画布")))
+	{
+		return FReply::Unhandled();
+	}
 	return FReply::Handled();
 }
 

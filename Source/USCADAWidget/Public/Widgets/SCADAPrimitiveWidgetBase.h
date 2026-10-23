@@ -36,6 +36,12 @@ public:
 	 *  CheckSlotSync 不会把它误判为设计器拖动输入） */
 	void TranslateGeometryAndSync(const FVector2D& Delta);
 
+	/** 供画布"内容适配画布"等批量操作用：几何数据以画布原点为基准整体缩放
+	 *  （p → p*Scale + PostOffset，PostOffset 为缩放后的居中平移量，一次到位避免两次取整误差），
+	 *  随后按 Set* 接口同款程序段取整（SnapPropertiesToPixel 各自规则）+ 正向同步槽/Slate。
+	 *  bSnapToPixel=false 的图元（SVG path 采样导入）点位保留亚像素，不被破坏。 */
+	void ScaleGeometryAndSync(float Scale, const FVector2D& PostOffset);
+
 	virtual void BeginDestroy() override;
 
 protected:
@@ -64,6 +70,13 @@ protected:
 
 	/** 几何数据整体平移（初始放置认领用）。语义纯虚（见 SnapPropertiesToPixel 注释） */
 	virtual void TranslateGeometryBy(const FVector2D& Delta) { }
+
+	/** 几何数据以 (0,0) 为基准整体缩放 p → p*Scale + PostOffset（画布"内容适配画布"用）；
+	 *  bScaleThickness=true 时把视觉尺寸随比例增长的"厚度类"属性一并乘 Scale
+	 *  （线宽——箭头尺寸在 Slate 层由线宽推导；矩形圆角属几何本体，无条件缩放）。
+	 *  本钩子只写数据不取整（取整由调用方随后 SnapPropertiesToPixel 按各子类规则收尾）。
+	 *  语义纯虚（见 SnapPropertiesToPixel 注释） */
+	virtual void ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness) { }
 
 	/** 把几何数据换算成槽内局部坐标同步给 Slate 层。语义纯虚（见 SnapPropertiesToPixel 注释） */
 	virtual void PushGeometryToSlate() { }

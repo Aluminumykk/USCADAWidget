@@ -82,6 +82,17 @@ void USCADAEllipseWidget::TranslateGeometryBy(const FVector2D& Delta)
 	Center += Delta;
 }
 
+void USCADAEllipseWidget::ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness)
+{
+	Center = Center * Scale + PostOffset;
+	RadiusX *= Scale;
+	RadiusY *= Scale;
+	if (bScaleThickness)
+	{
+		Thickness *= Scale;
+	}
+}
+
 void USCADAEllipseWidget::MapSlotToGeometry(UCanvasPanelSlot* CanvasSlot, const FVector2D& RawPos, const FVector2D& RawSize, bool bInteractionStart)
 {
 	// 规范化：min 位置 + 正尺寸；记录原始符号（椭圆镜像 = 自身，符号沿只做基线跟踪）

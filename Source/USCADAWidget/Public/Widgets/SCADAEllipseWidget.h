@@ -179,6 +179,9 @@ protected:
 	/** 几何数据整体平移（初始放置认领用） */
 	virtual void TranslateGeometryBy(const FVector2D& Delta) override;
 
+	/** Center*k+off、RadiusX/Y*k；bScaleThickness 时边框 Thickness 一并乘 k */
+	virtual void ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness) override;
+
 	/** 把半径同步给 Slate 层（中心由槽位置决定，本地中心恒为 (RadiusX, RadiusY)） */
 	virtual void PushGeometryToSlate() override;
 

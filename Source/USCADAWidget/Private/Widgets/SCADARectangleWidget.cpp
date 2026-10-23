@@ -84,6 +84,19 @@ void USCADARectangleWidget::TranslateGeometryBy(const FVector2D& Delta)
 	Position += Delta;
 }
 
+void USCADARectangleWidget::ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness)
+{
+	Position = Position * Scale + PostOffset;
+	Size = Size * Scale;
+	// 圆角是几何本体（视觉比例的一部分），无条件随缩放；上限钳制由调用方 Snap 的 MaxR 规则收尾
+	CornerRadiusX *= Scale;
+	CornerRadiusY *= Scale;
+	if (bScaleThickness)
+	{
+		Thickness *= Scale;
+	}
+}
+
 void USCADARectangleWidget::MapSlotToGeometry(UCanvasPanelSlot* CanvasSlot, const FVector2D& RawPos, const FVector2D& RawSize, bool bInteractionStart)
 {
 	// 规范化：min 位置 + 正尺寸；记录原始符号（矩形镜像 = 自身，符号沿只做基线跟踪）

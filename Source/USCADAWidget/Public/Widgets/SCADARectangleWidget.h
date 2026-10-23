@@ -192,6 +192,10 @@ protected:
 	/** 几何数据整体平移（初始放置认领用） */
 	virtual void TranslateGeometryBy(const FVector2D& Delta) override;
 
+	/** Position*k+off、Size*k，CornerRadiusX/Y*k（圆角属几何本体、无条件随比例缩放）；
+	 *  bScaleThickness 时边框 Thickness 一并乘 k */
+	virtual void ScaleGeometryBy(float Scale, const FVector2D& PostOffset, bool bScaleThickness) override;
+
 	/** 把尺寸/圆角同步给 Slate 层（位置由槽位置决定，本地矩形恒为 (0,0,Size)） */
 	virtual void PushGeometryToSlate() override;
 

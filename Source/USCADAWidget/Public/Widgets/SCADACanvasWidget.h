@@ -83,6 +83,9 @@ public:
 
 	/** 适配内容大小：把 CanvasSize 收缩到直接子控件内容并集包围盒的尺寸（四周接壤、无留白），
 	 *  并把全部子控件整体平移使内容包围盒左上角落到 (0,0)。无子控件时什么都不做。
+	 *  包围盒为**视觉**包围盒：计入各子控件 RenderTransform（Translation/Angle/Scale/Shear +
+	 *  RenderTransformPivot）——恒等变换直接用基准矩形，否则四角绕 Pivot 变换取 AABB；
+	 *  平移归零只动几何数据/槽位置，RenderTransform 相对控件自身、数据平移后视觉自然跟随。
 	 *  图元子控件经 TranslateGeometryAndSync 正向通道平移（几何+槽+缓存一起动），
 	 *  普通控件（Text、嵌套画布等）直接写槽位置（无槽同步状态机，安全）。
 	 *  限定"根画布"场景：嵌套画布拟合后内容会归到该画布自己的左上角，

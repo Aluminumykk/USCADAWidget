@@ -6,8 +6,64 @@
 #include "Widgets/SCADACanvasSlot.h"
 #include "Widgets/SCADAPrimitiveWidgetBase.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Slate/WidgetTransform.h"
+#include "Rendering/SlateRenderTransform.h"
+#include "Math/TransformCalculus2D.h"
 
 #define LOCTEXT_NAMESPACE "USCADAWidget"
+
+namespace
+{
+	/** 恒等判定：RenderTransform 未做任何变换（Translation 零 / Scale=1 / Shear 零 / Angle=0）。
+	 *  未变换的子控件直接采用基准包围盒走快路径，避免浮点变换误差污染现有整数像素对齐结果 */
+	bool IsIdentityRenderTransform(const FWidgetTransform& RenderTransform)
+	{
+		return RenderTransform.Translation.IsNearlyZero()
+			&& RenderTransform.Scale.Equals(FVector2D::One())
+			&& RenderTransform.Shear.IsNearlyZero()
+			&& FMath::IsNearlyZero(RenderTransform.Angle);
+	}
+
+	/** 把基准矩形四角按 RenderTransform 绕 Pivot 点变换后取 AABB（视觉包围盒）。
+	 *  变换数学逐字复刻引擎实际渲染路径，不是凭记忆自创：
+	 *  - FWidgetTransform→FSlateRenderTransform：`FWidgetTransform::ToSlateRenderTransform()`
+	 *    （Engine/Source/Runtime/UMG/Public/Slate/WidgetTransform.h）=
+	 *    `Concatenate(Scale, Shear, FQuat2D(radians(Angle)), Translation)`。引擎 Concatenate 的
+	 *    参数顺序语义是**左参数先作用于点**（见 Core/Public/Math/TransformCalculus2D.h 的
+	 *    `Concatenate(Transform,Translation)` 等特化：左侧先作用、Translation 最后作平移加成），
+	 *    即先缩放 → 错切 → 旋转，平移最后（平移发生在父坐标系，不被 Angle 旋转）。
+	 *  - Pivot 应用方式：子几何的 `AccumulatedRenderTransform = Concatenate(Inverse(T(pc)), RT,
+	 *    T(pc), Layout, Parent)`（Engine/Source/Runtime/SlateCore/Public/Layout/Geometry.h
+	 *    TGeometry 构造函数），pc = Pivot × 子控件本地尺寸——先把 pc 移到原点 → 应用 RT →
+	 *    移回 pc，即以 pc 为不动点绕 Pivot 变换（Pivot 是相对布局分配子控件尺寸的归一化值）。
+	 *  本函数只做 Pivot 三段合成（子本地坐标系，原点 = 基准矩形左上角），
+	 *  基准矩形原点 ↔ 画布设计坐标的平移由调用方加减完成。 */
+	void TransformRectByRenderTransform(const FWidgetTransform& RenderTransform, const FVector2D& Pivot,
+		const FVector2D& LocalSize, const FVector2D& RectMin, const FVector2D& RectMax,
+		FVector2D& OutMin, FVector2D& OutMax)
+	{
+		// Pivot 归一化 → 像素偏移（对应引擎 TransformPoint(FScale2D(size), pivot)）
+		const FVector2D PivotLocal(Pivot.X * LocalSize.X, Pivot.Y * LocalSize.Y);
+		const FSlateRenderTransform PivotShift(PivotLocal);
+		const FSlateRenderTransform Local = Concatenate(
+			Inverse(PivotShift), RenderTransform.ToSlateRenderTransform(), PivotShift);
+
+		// 四角变换取 AABB（5.7 的 TVector2 无 Max() 哨兵静态函数，用首角初始化）
+		OutMin = OutMax = RectMin + Local.TransformPoint(FVector2D::ZeroVector);
+		const FVector2D Size = RectMax - RectMin;
+		const FVector2D CornerOffsets[3] = {
+			FVector2D(Size.X, 0.0), Size, FVector2D(0.0, Size.Y),
+		};
+		for (const FVector2D& Offset : CornerOffsets)
+		{
+			const FVector2D Corner = RectMin + Local.TransformPoint(Offset);
+			OutMin.X = FMath::Min(OutMin.X, Corner.X);
+			OutMin.Y = FMath::Min(OutMin.Y, Corner.Y);
+			OutMax.X = FMath::Max(OutMax.X, Corner.X);
+			OutMax.Y = FMath::Max(OutMax.Y, Corner.Y);
+		}
+	}
+}
 
 TSharedPtr<SSCADACanvas> USCADACanvasWidget::GetSCADACanvas() const
 {
@@ -117,6 +173,21 @@ void USCADACanvasWidget::FitCanvasToContent()
 		else
 		{
 			continue;
+		}
+
+		// 计入子控件的 RenderTransform（UE 原生 Translation/Angle/Scale/Shear + RenderTransformPivot，
+		// SVG 导入 rotate 分组画布同机制）：拟合的是**视觉**包围盒。恒等走快路径（浮点误差
+		// 不污染未变换控件的整数结果）；否则四角绕 Pivot 变换后取 AABB（见上方函数注释）。
+		// LocalSize 用基准矩形尺寸：图元槽矩形 == 数据包围盒（正向同步不变式），非图元
+		// 基准矩形即槽位置+尺寸，两种情形下都正是布局分配给子控件的尺寸。
+		const FWidgetTransform& ChildRenderTransform = Child->GetRenderTransform();
+		if (!IsIdentityRenderTransform(ChildRenderTransform))
+		{
+			FVector2D VisMin, VisMax;
+			TransformRectByRenderTransform(ChildRenderTransform, Child->GetRenderTransformPivot(),
+				Max - Min, Min, Max, VisMin, VisMax);
+			Min = VisMin;
+			Max = VisMax;
 		}
 
 		if (bHasContent)

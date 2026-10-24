@@ -54,6 +54,29 @@ FVector2D SSCADACanvas::ComputeEffectiveScale(const FVector2D& AreaSize) const
 	}
 }
 
+FVector2D SSCADACanvas::ComputeDesiredSize(float /*LayoutScaleMultiplier*/) const
+{
+	// 基类 SConstraintCanvas::ComputeDesiredSize 返回"非折叠子控件的槽偏移+尺寸并集"——
+	// 两处与实际显示对不上：① RenderTransform 是渲染层效果不参与布局，旋转过的内容
+	// 槽并集 ≠ 视觉范围，「画布适配内容」（收缩到视觉包围盒）后 Desired 与 CanvasSize 矛盾；
+	// ② 内容小于/为空时 Desired 塌缩，设计器「所需」预览下画布框与网格范围互相错位。
+	// 本实现纯计算无副作用（布局热路径）：Desired 恒由 CanvasSize（设计基准，≥1 防退化）驱动。
+	// - ScaleMode=None：再乘 Zoom——Zoom 是对整画内容的渲染缩放，实际占用就是 CanvasSize×Zoom。
+	// - ScaleMode≠None：返回 CanvasSize——内容随实际分配尺寸自动适配，Desired 只提供设计
+	//   基准；父级给固定尺寸分配时 Desired 根本不参与（实际尺寸由槽/父布局决定）。
+	// 影响面：仅 UMG「所需（Desired）」预览、AutoSize 槽、以及未被父级强制分配尺寸的
+	// 运行时布局；网格/内容绘制本就按分配几何走，Desired 与其无关。
+	const FVector2D Design(
+		FMath::Max(DesignSize.Get().X, 1.0),
+		FMath::Max(DesignSize.Get().Y, 1.0));
+	if (ScaleMode.Get() != ESCADACanvasScaleMode::None)
+	{
+		return Design;
+	}
+	const float Z = FMath::Max(Zoom.Get(), 0.01f);
+	return Design * Z;
+}
+
 FGeometry SSCADACanvas::MakeScaledChildGeometry(const FGeometry& AllottedGeometry) const
 {
 	const FVector2D EffectiveScale = ComputeEffectiveScale(AllottedGeometry.GetLocalSize());

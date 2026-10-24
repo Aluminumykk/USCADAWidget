@@ -50,6 +50,12 @@ public:
 
 	virtual void OnArrangeChildren(const FGeometry& AllottedGeometry, FArrangedChildren& ArrangedChildren) const override;
 
+	/** 布局期望尺寸改由 CanvasSize 驱动（替换基类"子控件槽矩形并集"，见 cpp 注释）：
+	 *  ScaleMode=None → CanvasSize×Zoom；≠None → CanvasSize（设计基准尺寸）。
+	 *  使 UMG「所需（Desired）」预览下画布显示框恒等于设计尺寸（×Zoom）== 网格范围，
+	 *  与"画布适配内容"收缩后的视觉内容贴边一致。 */
+	virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override;
+
 private:
 	/** 按缩放模式与实际分配尺寸计算生效缩放系数（逐轴；None = 手动 Zoom 标量） */
 	FVector2D ComputeEffectiveScale(const FVector2D& AreaSize) const;

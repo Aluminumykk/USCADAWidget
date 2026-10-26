@@ -107,6 +107,26 @@ private:
 		const TArray<FVector2D>& TriVerts, const TArray<SlateIndex>& IdentityIndices, const FLinearColor& InColor, ESlateDrawEffect DrawEffects,
 		const FSCADALinearGradient* Gradient = nullptr, const FVector2D* GradientBBoxMin = nullptr, const FVector2D* GradientBBoxSize = nullptr) const;
 
+	/** 渐变填充专用的轮廓 AA 覆层：沿外轮廓**逐点取渐变采样色**——每条轮廓边按它两端的色差
+	 *  自适应细分（每段颜色台阶 ≤1/255），量化后同色的相邻小段才合并成一次 AA 折线调用。
+	 *  渐变激活时 FillColor 只是「渐变停用时的回退色」（导入器/SVG 工厂往里写 stops 平均色），
+	 *  整圈按它覆一层会在渐变两端显出一圈错色描边（用户看到的"渐变块凭空多了边框"），
+	 *  所以此处不能走继承来的纯色 DrawContourAA。
+	 *  第一版按**边中点**取一次色、整条边一个色：水平渐变的上下边，填充色沿 X 连续变化而
+	 *  覆层一段一色，段界处与该处真实填充色差出一截亮度，观感就是「屏幕边缘漏光」。改为
+	 *  逐点采样 + 按色差细分后，残差被压到 ≤1 个 8-bit 台阶（且被覆层自身的 1px 柔边吃掉）。
+	 *  ClosedLoop = 首尾回接的闭口环（几何缓存里的 Closed），BBoxMin/BBoxSize = 与
+	 *  DrawTriangleList 同一个参照包围盒（局部空间），InColor = 风格 tint（与填色三角扇同侧）；
+	 *  取色链路与填充完全相同（点 → 投影到轴 → Sample → ×InColor → 8-bit sRGB 量化），
+	 *  所以同一点上覆层与填充必然同色。
+	 *  各段是**开口**折线（相邻段共用端点即自然相接，各自闭口会在段间多出弦线）。
+	 *  总点数上限 MaxGradientOverlayPoints：超出时按各边色差需求比例缩回（每边至少 1 段），
+	 *  同时也就是稠密环（256 点采样圆等）的抽稀上界——大半径圆弧 ≤3° 的弦高误差 <0.05px，
+	 *  远小于 1px 柔边，不可辨；换来的是每帧元素数量有上界。 */
+	void DrawGradientContourAA(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FPaintGeometry& PaintGeom,
+		const TArray<FVector2D>& ClosedLoop, const FSCADALinearGradient& Gradient,
+		const FVector2D& BBoxMin, const FVector2D& BBoxSize, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const;
+
 	/** 闭合轮廓整体偏移 OffsetDistance（边框外画用，正=向内 / 负=向外）：逐顶点取相邻
 	 *  两边偏移线的斜接交点（miter，限幅 4x 防尖角爆炸），凹顶点由同一公式自然处理。
 	 *  输出闭合点列（末尾回接首点）。|OffsetDistance|≈0 时输出原轮廓；

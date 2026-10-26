@@ -159,22 +159,28 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 				C.FillIdentityIndices.Reset();
 			}
 		}
+		// 渐变轴归一化坐标的参照包围盒 = 填充轮廓包围盒（局部空间）；填色三角扇与渐变覆层共用
+		// 同一份（两者必须同一基准，否则覆层取色与填充色沿轴错开）。
+		FVector2D GradBBoxMin = FVector2D::ZeroVector, GradBBoxSize = FVector2D::ZeroVector;
+		if (bUseGradientFill)
+		{
+			FVector2D BBoxMin(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+			FVector2D BBoxMax(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+			for (const FVector2D& P : C.Closed)
+			{
+				BBoxMin = FVector2D(FMath::Min(BBoxMin.X, P.X), FMath::Min(BBoxMin.Y, P.Y));
+				BBoxMax = FVector2D(FMath::Max(BBoxMax.X, P.X), FMath::Max(BBoxMax.Y, P.Y));
+			}
+			GradBBoxMin = BBoxMin;
+			GradBBoxSize = BBoxMax - BBoxMin;
+		}
 		if (C.bFillValid)
 		{
 			if (bUseGradientFill)
 			{
-				// 渐变轴归一化坐标的参照包围盒 = 填充轮廓包围盒（局部空间）
-				FVector2D BBoxMin(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
-				FVector2D BBoxMax(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
-				for (const FVector2D& P : C.Closed)
-				{
-					BBoxMin = FVector2D(FMath::Min(BBoxMin.X, P.X), FMath::Min(BBoxMin.Y, P.Y));
-					BBoxMax = FVector2D(FMath::Max(BBoxMax.X, P.X), FMath::Max(BBoxMax.Y, P.Y));
-				}
-				const FVector2D BBoxSize = BBoxMax - BBoxMin;
 				// InColor 传 StyleTint：渐变顶点色 = 采样色 × tint（禁用态/透明度仍生效）
 				DrawTriangleList(OutDrawElements, LayerId, AllottedGeometry, C.FillTriVerts, C.FillIdentityIndices,
-					StyleTint, DrawEffects, &FillGradient, &BBoxMin, &BBoxSize);
+					StyleTint, DrawEffects, &FillGradient, &GradBBoxMin, &GradBBoxSize);
 			}
 			else
 			{
@@ -186,9 +192,19 @@ int32 SSCADAPolygon::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGe
 		// 同色闭口 AA 线（两侧渐变 + 实心核，见 DrawContourAA 说明），把边缘外包络换成
 		// 渐变边。虚线边框场景下由本覆层负责划间空隙里的填充边缘（划本身是 AA 线且在
 		// 更高层，不受影响）。
+		// **渐变填充时例外**：逐段取该处渐变的采样色（见 DrawGradientContourAA）。渐变激活时
+		// FillColor 只是"渐变停用时的回退色"（导入器/SVG 工厂写的是 stops 平均色），整圈按它
+		// 覆一层会在渐变两端显出一圈与渐变端点色不符的错色描边，观感等同凭空多了一圈边框。
 		if (!bBorderSolidDrawn)
 		{
-			DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.Closed, FillFinalColor, DrawEffects);
+			if (bUseGradientFill)
+			{
+				DrawGradientContourAA(OutDrawElements, LayerId, PaintGeom, C.Closed, FillGradient, GradBBoxMin, GradBBoxSize, StyleTint, DrawEffects);
+			}
+			else
+			{
+				DrawContourAA(OutDrawElements, LayerId, PaintGeom, C.Closed, FillFinalColor, DrawEffects);
+			}
 		}
 	}
 
@@ -398,6 +414,135 @@ void SSCADAPolygon::DrawTriangleList(FSlateWindowElementList& OutDrawElements, i
 		}
 	}
 	FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, SCADAStroke::GetWhiteFillHandle(), Verts, IdentityIndices, nullptr, 0, 0, DrawEffects);
+}
+
+void SSCADAPolygon::DrawGradientContourAA(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FPaintGeometry& PaintGeom,
+	const TArray<FVector2D>& ClosedLoop, const FSCADALinearGradient& Gradient,
+	const FVector2D& BBoxMin, const FVector2D& BBoxSize, const FLinearColor& InColor, ESlateDrawEffect DrawEffects) const
+{
+	const int32 Ring = ClosedLoop.Num() - 1; // 末点 = 首点回接（几何缓存里的 Closed 恒为闭口环）
+	if (Ring < 3 || !Gradient.IsActive())
+	{
+		return;
+	}
+
+	// 渐变轴与 DrawTriangleList 同一套换算（归一化轴 × 参照包围盒还原为局部坐标；轴退化成
+	// 零长时恒取起点色）。取色语义也与填充完全一致——轮廓上的点 → 投影到轴 → Sample → 乘
+	// InColor → 8-bit sRGB 量化，因此覆层与填充在同一点上必然同色，不会有色差台阶。
+	const FVector2D AxisA = BBoxMin + Gradient.AxisStart * BBoxSize;
+	const FVector2D AxisDir = BBoxMin + Gradient.AxisEnd * BBoxSize - AxisA;
+	const float AxisLen2 = (float)AxisDir.SizeSquared();
+	auto SampleQuantized = [&](const FVector2D& P) -> FColor
+	{
+		const float T = AxisLen2 > KINDA_SMALL_NUMBER
+			? FMath::Clamp((float)FVector2D::DotProduct(P - AxisA, AxisDir) / AxisLen2, 0.0f, 1.0f)
+			: 0.0f;
+		return (Gradient.Sample(T) * InColor).ToFColor(true);
+	};
+	// 两个量化色之间的最大通道台阶（8-bit），用它决定一条边要细分成几段
+	auto MaxChannelDelta = [](const FColor& A, const FColor& B) -> int32
+	{
+		return FMath::Max(FMath::Abs((int32)A.R - (int32)B.R),
+			FMath::Max(FMath::Abs((int32)A.G - (int32)B.G),
+			FMath::Max(FMath::Abs((int32)A.B - (int32)B.B), FMath::Abs((int32)A.A - (int32)B.A))));
+	};
+	auto BlendQuantized = [](const FColor& A, const FColor& B) -> FColor
+	{
+		return FColor(
+			(uint8)((A.R + B.R + 1) / 2), (uint8)((A.G + B.G + 1) / 2),
+			(uint8)((A.B + B.B + 1) / 2), (uint8)((A.A + B.A + 1) / 2));
+	};
+
+	// ① 逐点取色，不是逐边中点取色：一条轮廓边按**它两端的色差**自适应细分，每段的颜色台阶
+	//    ≤ MaxColorStepPerSegment 个 8-bit 台阶。按边中点单色覆一层是「漏光」的根因——水平
+	//    渐变的上下边填充色沿 X 连续变化，一段一色就会在段界处与该处真实填充色差出一截。
+	// ② 点数预算 MaxGradientOverlayPoints（与稠密圆环抽稀同一个上界）：总段数超预算时按各边
+	//    需求比例缩回（每边至少 1 段），残差 = 该边色差 ÷ 段数，仍在一两个台阶量级，
+	//    被覆层自身的 1px 柔边吃掉，不可辨。
+	// ③ 相邻小段**量化后同色才合并**成一次 MakeLines：渐变平坦处（水平渐变的左右两条边、
+	//    stops 之间的等色区）整段合成一条；色变明显处逐段（每段 ≤128 段）。
+	static constexpr int32 MaxGradientOverlayPoints = 128;
+	static constexpr int32 MaxColorStepPerSegment = 1; // 单位 = 8-bit 通道台阶（1/255）
+	// 复用缓冲：函数内 static（Slate 绘制单线程，与 SSCADALine::AppendArrow 的 static 点列
+	// 缓冲同一先例）——Reset/SetNum 后跨调用只覆写元素，消除逐帧的堆分配。
+	static TArray<int32> SegPerEdge;
+	static TArray<FVector2D> WalkPos;
+	static TArray<FColor> WalkColor;
+	static TArray<FVector2D> RunBuf;
+
+	SegPerEdge.SetNumUninitialized(Ring);
+	int32 TotalSegments = 0;
+	for (int32 i = 0; i < Ring; ++i)
+	{
+		const int32 Next = (i + 1) % Ring;
+		const int32 Delta = MaxChannelDelta(SampleQuantized(ClosedLoop[i]), SampleQuantized(ClosedLoop[Next]));
+		const int32 Segments = FMath::Clamp(
+			(Delta + MaxColorStepPerSegment - 1) / MaxColorStepPerSegment, 1, MaxGradientOverlayPoints);
+		SegPerEdge[i] = Segments;
+		TotalSegments += Segments;
+	}
+	if (TotalSegments > MaxGradientOverlayPoints)
+	{
+		const float Shrink = (float)MaxGradientOverlayPoints / (float)TotalSegments;
+		TotalSegments = 0;
+		for (int32 i = 0; i < Ring; ++i)
+		{
+			SegPerEdge[i] = FMath::Max(1, FMath::RoundToInt((float)SegPerEdge[i] * Shrink));
+			TotalSegments += SegPerEdge[i];
+		}
+	}
+
+	WalkPos.Reset(TotalSegments + 1);
+	WalkColor.Reset(TotalSegments + 1);
+	for (int32 i = 0; i < Ring; ++i)
+	{
+		const FVector2D& A = ClosedLoop[i];
+		const FVector2D& B = ClosedLoop[(i + 1) % Ring];
+		const int32 Segments = SegPerEdge[i];
+		for (int32 s = 0; s < Segments; ++s)
+		{
+			const FVector2D P = A + (B - A) * ((float)s / (float)Segments);
+			WalkPos.Add(P);
+			WalkColor.Add(SampleQuantized(P));
+		}
+	}
+	WalkPos.Add(WalkPos[0]); // 闭环：末点回到首点，最后一小段接回起点
+	WalkColor.Add(WalkColor[0]);
+	const int32 SegCount = WalkPos.Num() - 1; // 段 k = WalkPos[k] → WalkPos[k+1]
+
+	// 段色 = 两端采样色的均值（段内任一点与它的偏差已由 ① 控制在阈值内）；运行段是**开口**
+	// 折线——相邻运行共用端点即自然相接，各自闭口反而会在段间多出一条弦。
+	auto FlushRun = [&](int32 FirstSeg, int32 LastSeg, const FColor& OverlayColor)
+	{
+		if (OverlayColor.A == 0)
+		{
+			return; // 完全透明的采样段（渐变带 alpha 停靠点）无需覆层
+		}
+		RunBuf.Reset(LastSeg - FirstSeg + 2);
+		for (int32 k = FirstSeg; k <= LastSeg; ++k)
+		{
+			RunBuf.Add(WalkPos[k]);
+		}
+		RunBuf.Add(WalkPos[LastSeg + 1]);
+		// 量化色反变换回线性色：与下方填充三角扇的 8-bit sRGB 顶点色同一档
+		FSlateDrawElement::MakeLines(OutDrawElements, LayerId, PaintGeom, RunBuf, DrawEffects,
+			FLinearColor::FromSRGBColor(OverlayColor), /*bAntialias=*/true, 3.0f);
+	};
+
+	int32 RunStart = 0;
+	FColor RunColor = BlendQuantized(WalkColor[0], WalkColor[1]);
+	for (int32 k = 1; k < SegCount; ++k)
+	{
+		const FColor Next = BlendQuantized(WalkColor[k], WalkColor[k + 1]);
+		if (Next == RunColor)
+		{
+			continue;
+		}
+		FlushRun(RunStart, k - 1, RunColor);
+		RunStart = k;
+		RunColor = Next;
+	}
+	FlushRun(RunStart, SegCount - 1, RunColor);
 }
 
 bool SSCADAPolygon::BuildOffsetContour(const TArray<FVector2D>& Poly, float OffsetDistance, TArray<FVector2D>& OutClosedRing) const

@@ -73,7 +73,8 @@ struct FSCADALinearGradient
 {
 	GENERATED_BODY()
 
-	/** 启用后填充色改用渐变（FillColor 仅作轮廓 AA 覆层等处的代表色，建议保持为渐变平均色） */
+	/** 启用后填充色改用渐变：填充三角扇与轮廓 AA 覆层都逐段采样本渐变，FillColor 退化为
+	 *  「渐变停用（勾掉本项）时的回退色」，建议保持为渐变平均色（导入器/SVG 工厂即写平均色） */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bEnabled = false;
 

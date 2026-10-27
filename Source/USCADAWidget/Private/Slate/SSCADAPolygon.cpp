@@ -506,8 +506,13 @@ void SSCADAPolygon::DrawGradientContourAA(FSlateWindowElementList& OutDrawElemen
 			WalkColor.Add(SampleQuantized(P));
 		}
 	}
-	WalkPos.Add(WalkPos[0]); // 闭环：末点回到首点，最后一小段接回起点
-	WalkColor.Add(WalkColor[0]);
+	// 闭环：末点回到首点，最后一小段接回起点。首点**按值**取用再 Add——Add(const T&) 的
+	// 引用参数若指向本容器自身元素，UE 5.7 容器的 CheckAddress 守卫会直接断言（与是否
+	// 真的扩容无关），这是 vAEMSystem 打开渐变多边形资产崩溃（Array.h:1957）的根因。
+	const FVector2D FirstPos = WalkPos[0];
+	const FColor FirstColor = WalkColor[0];
+	WalkPos.Add(FirstPos);
+	WalkColor.Add(FirstColor);
 	const int32 SegCount = WalkPos.Num() - 1; // 段 k = WalkPos[k] → WalkPos[k+1]
 
 	// 段色 = 两端采样色的均值（段内任一点与它的偏差已由 ① 控制在阈值内）；运行段是**开口**

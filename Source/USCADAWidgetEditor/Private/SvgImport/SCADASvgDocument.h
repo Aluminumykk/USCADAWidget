@@ -8,12 +8,30 @@
  * SVG 文档中间表示（SCADA 图元导入用，纯数据、无 UMG 依赖）。
  * 支持子集：rect（含 rx/ry 圆角）/ circle / ellipse / line / polyline / polygon /
  * path（d 全命令 M/L/H/V/C/S/Q/T/A/Z，贝塞尔与椭圆弧导入期采样折线化，闭合或有填充 →
- * 多边形、仅描边开口 → 折线，一条 path 可产多个图元）/ g（分组：translate 烘平、rotate 保留容器），
+ * 多边形、仅描边开口 → 折线，一条 path 可产多个图元）/ g（分组的 transform 只要能把图元模型画得动，
+ *  一律精确换算进几何、不留嵌套画布：translate / scale / 镜像 scale(-1,1) / 对角 matrix / 90° 整数倍
+ *  旋转对任何图元都无损；任意角度旋转在子树只含点列类图元（path/polyline/polygon/line、可展开成
+ *  四点多边形的无圆角 rect、等比下的圆）时同样精确 —— Visio 的整页旋转、左右对称部件与斜放管件
+ *  就全靠这三类。只有 skew、奇异矩阵，或子树里出现椭圆 / 带圆角矩形 / 非等比下的圆时，
+ *  才保留容器节点（RenderTransform），可当动画锚点），
  * 样式 fill / stroke / stroke-width / opacity / fill-opacity / stroke-opacity（沿组继承），
- * defs 内 linearGradient 完整解析为线性渐变（stops + 渐变轴 + gradientUnits + href 继承，
- * 逐顶点色精确绘制），radialGradient 回退为加权平均纯色（真径向渐变排 P2）。
+ * 同一元素上的取值优先级 = 样式表声明 > presentation attribute（SVG 规范的级联方向）；
+ * defs 内 linearGradient 完整解析为线性渐变（stops + 渐变轴 + gradientUnits + gradientTransform
+ * 的 translate/rotate/scale/matrix/skew 折算 + href 继承，逐顶点色精确绘制），
+ * radialGradient 回退为加权平均纯色（真径向渐变排 P2）。
  * clip-path 支持 rect 组合（轴对齐裁剪框：rect 叶子钳制、完全裁掉的跳过，其余形状越界仅警告）；
  * mask 不支持。
+ *
+ * <style> 样式表（Visio / Illustrator 之类把 fill 写进类规则、元素只剩 class="st1" 的写法）：
+ * 解析期先摘走 style 块单独解析为规则表，支持简单复合选择器 tag / .class / #id 与
+ * display:none，按特异度（id>class>tag）与文档顺序级联；含组合器、属性选择器、伪类的选择器
+ * 与 at-rule（@media 等）跳过。元素选择器的后代/子选择器不支持——图元是扁平元素，
+ * 继承链只由 SVG 分组表达。
+ *
+ * 交给 FXmlFile 之前的文本预处理见 PrepareSvgTextForXmlParser：FXmlFile 是行式 token 解析器，
+ * CDATA 段、style 内的 CSS、跨行的属性值（Visio 的 path d 就是多行的）三者都会让它报
+ * "Malformed Xml File"，必须先摘除/折平。
+ *
  * 坐标一律为 viewBox 空间（左上角原点、Y 向下，与 SCADA 画布设计坐标同构）。
  */
 
